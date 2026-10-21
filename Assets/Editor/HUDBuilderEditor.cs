@@ -34,6 +34,10 @@ public class HUDBuilderEditor : Editor
         teleop.nodeOneIp = "10.66.68.10";
         teleop.nodeTwoIp = "10.66.68.82";
 
+        // Ensure VResqSurroundDisplay (Surround Panoramic Dome)
+        VResqSurroundDisplay surround = hudRoot.GetComponent<VResqSurroundDisplay>() ?? hudRoot.AddComponent<VResqSurroundDisplay>();
+        hud.surroundDisplay = surround;
+
         // Find or create Center_HUD & Center_VideoScreen
         Transform centerHUD = hudRoot.transform.Find("Center_HUD");
         if (centerHUD != null)
@@ -57,17 +61,42 @@ public class HUDBuilderEditor : Editor
             }
         }
 
-        // Wire Buttons
-        Transform bottomBar = hudRoot.transform.Find("Bottom_ActionBar");
-        if (bottomBar != null)
+        // Ensure LeftPanel_Map Radar
+        Transform leftPanel = hudRoot.transform.Find("LeftPanel_Map");
+        if (leftPanel != null)
         {
-            WireButton(bottomBar, "Btn_SCAN", () => teleop.ActionScan());
-            WireButton(bottomBar, "Btn_BEACON", () => teleop.ActionBeacon());
-            WireButton(bottomBar, "Btn_CENTER", () => teleop.ActionCenter());
-            WireButton(bottomBar, "Btn_APPROACH", () => teleop.ActionApproach());
-            WireButton(bottomBar, "Btn_BACK OUT", () => teleop.ActionBackOut());
-            WireButton(bottomBar, "Btn_MORE", () => teleop.ActionEmergencyStop());
-            WireButton(bottomBar, "Btn_E-STOP", () => teleop.ActionEmergencyStop());
+            VResqRadarMap radar = leftPanel.GetComponent<VResqRadarMap>() ?? leftPanel.gameObject.AddComponent<VResqRadarMap>();
+            Transform radarScreen = leftPanel.Find("Radar_Screen");
+            if (radarScreen == null)
+            {
+                GameObject rObj = new GameObject("Radar_Screen");
+                rObj.transform.SetParent(leftPanel, false);
+                RectTransform rt = rObj.AddComponent<RectTransform>();
+                rt.anchoredPosition = new Vector2(0, 40);
+                rt.sizeDelta = new Vector2(300, 300);
+                RawImage ri = rObj.AddComponent<RawImage>();
+                radar.radarRawImage = ri;
+            }
+            else
+            {
+                radar.radarRawImage = radarScreen.GetComponent<RawImage>();
+            }
+            hud.radarMap = radar;
+        }
+
+        // Wire Buttons across all panels
+        Button[] allButtons = hudRoot.GetComponentsInChildren<Button>(true);
+        foreach (var b in allButtons)
+        {
+            string n = b.name.ToUpper();
+            b.onClick.RemoveAllListeners();
+            if (n.Contains("SCAN")) b.onClick.AddListener(() => teleop.ActionScan());
+            else if (n.Contains("BEACON")) b.onClick.AddListener(() => teleop.ActionBeacon());
+            else if (n.Contains("CENTER")) b.onClick.AddListener(() => teleop.ActionCenter());
+            else if (n.Contains("APPROACH")) b.onClick.AddListener(() => teleop.ActionApproach());
+            else if (n.Contains("BACK")) b.onClick.AddListener(() => teleop.ActionBackOut());
+            else if (n.Contains("MORE") || n.Contains("VIEW") || n.Contains("SURROUND")) b.onClick.AddListener(() => surround.CycleNextViewMode());
+            else if (n.Contains("STOP") || n.Contains("E_STOP")) b.onClick.AddListener(() => teleop.ActionEmergencyStop());
         }
 
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(hudRoot.scene);

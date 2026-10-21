@@ -215,5 +215,10 @@ namespace VResQ.Control
         {
             VResqClient.Instance?.SendDriveCommand(0, 0, 90, 0.7f, estop: true);
         }
+
+        public void ActionToggleSurroundView()
+        {
+            VResq.Video.VResqSurroundDisplay.Instance?.CycleNextViewMode();
+        }
     }
 }
