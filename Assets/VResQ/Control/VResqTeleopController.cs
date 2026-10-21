@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.XR;
 using VResQ.Core;
+using VResQ.Video;
 
 namespace VResQ.Control
 {
@@ -218,7 +219,7 @@ namespace VResQ.Control
 
         public void ActionToggleSurroundView()
         {
-            VResq.Video.VResqSurroundDisplay.Instance?.CycleNextViewMode();
+            VResqSurroundDisplay.Instance?.CycleNextViewMode();
         }
     }
 }
