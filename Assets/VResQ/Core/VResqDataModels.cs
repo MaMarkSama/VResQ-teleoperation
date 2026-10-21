@@ -72,8 +72,20 @@ namespace VResQ.Core
         public string id;
         public string label;
         public float score;
+        public float confidence;
         public float[] box; // [x1, y1, x2, y2]
+        public float[] bbox; // [x1, y1, x2, y2]
         public string source;
+    }
+
+    [Serializable]
+    public class AIConfigData
+    {
+        public string mode = "jetson";
+        public float confidence_threshold = 0.65f;
+        public string[] target_classes;
+        public int total_detections;
+        public float detector_fps;
     }
 
     [Serializable]
@@ -113,9 +125,11 @@ namespace VResQ.Core
     public class RobotStateSnapshot
     {
         public NodeIdentityData identity;
+        public NodeIdentityData node_info;
         public TelemetryData telemetry = new TelemetryData();
         public AnalyticsData analytics;
         public AIDetection[] ai_detections;
+        public AIConfigData ai_config = new AIConfigData();
         public int servo_deg = 90;
         public int left_pwm;
         public int right_pwm;

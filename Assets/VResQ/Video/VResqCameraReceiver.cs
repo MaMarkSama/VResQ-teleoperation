@@ -38,6 +38,7 @@ namespace VResQ.Video
 
         [SerializeField] private float currentFps = 0f;
         public float FPS => currentFps;
+        public float StreamFps => currentFps;
 
         [SerializeField] private int framesReceived = 0;
 

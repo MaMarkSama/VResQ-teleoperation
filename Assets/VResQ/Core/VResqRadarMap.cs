@@ -8,7 +8,7 @@ namespace VResQ.Core
 {
     /// <summary>
     /// Interactive 2D Tactical Radar & Coordinate Map for LeftPanel_Map.
-    /// Plots ultrasonic distance, rotating sweep beam, robot heading, and swarm peer nodes.
+    /// Plots camera FOV cone, ultrasonic distance, rotating sweep beam, robot heading, and swarm fleet nodes.
     /// </summary>
     public class VResqRadarMap : MonoBehaviour
     {
@@ -18,8 +18,8 @@ namespace VResQ.Core
 
         [Header("Radar Configuration")]
         public int textureSize = 256;
-        public float maxRangeMeters = 3.0f; // Outer ring distance
-        public float sweepSpeedDegPerSec = 120f;
+        public float maxRangeMeters = 3.0f;
+        public float sweepSpeedDegPerSec = 110f;
 
         private Texture2D _radarTexture;
         private Color32[] _clearBuffer;
@@ -32,15 +32,16 @@ namespace VResQ.Core
         private float _poseX = 0f;
         private float _poseY = 0f;
 
-        private readonly Color32 _bgColor = new Color32(8, 18, 30, 240);
-        private readonly Color32 _gridColor = new Color32(0, 180, 240, 70);
-        private readonly Color32 _axisColor = new Color32(0, 220, 255, 120);
-        private readonly Color32 _sweepColor = new Color32(0, 255, 200, 180);
-        private readonly Color32 _robotColor = new Color32(0, 255, 100, 255);
-        private readonly Color32 _alertObstacleColor = new Color32(255, 40, 40, 255);
-        private readonly Color32 _cautionObstacleColor = new Color32(255, 200, 0, 255);
-        private readonly Color32 _safeObstacleColor = new Color32(0, 220, 255, 255);
-        private readonly Color32 _peerColor = new Color32(160, 100, 255, 255);
+        private readonly Color32 _bgColor = new Color32(5, 13, 24, 245);
+        private readonly Color32 _gridColor = new Color32(0, 175, 230, 58);
+        private readonly Color32 _axisColor = new Color32(0, 225, 255, 115);
+        private readonly Color32 _fovColor = new Color32(0, 210, 255, 95);
+        private readonly Color32 _sweepColor = new Color32(0, 255, 195, 190);
+        private readonly Color32 _robotColor = new Color32(0, 255, 120, 255);
+        private readonly Color32 _alertObstacleColor = new Color32(255, 45, 55, 255);
+        private readonly Color32 _cautionObstacleColor = new Color32(255, 195, 20, 255);
+        private readonly Color32 _safeObstacleColor = new Color32(0, 235, 255, 255);
+        private readonly Color32 _peerOnlineColor = new Color32(150, 110, 255, 255);
 
         private void Awake()
         {
@@ -100,8 +101,11 @@ namespace VResQ.Core
 
             if (mapCoordsText != null)
             {
-                string rName = state.identity != null ? state.identity.node_name : "ROBOT";
-                mapCoordsText.text = $"POSE: X {state.pose_x:+0.00;-0.00}m  Y {state.pose_y:+0.00;-0.00}m\nHDG: {((_lastHeadingDeg % 360f + 360f) % 360f):000}° | {rName.ToUpper()}";
+                string rName = (state.node_info != null && !string.IsNullOrEmpty(state.node_info.node_name))
+                    ? state.node_info.node_name
+                    : (state.identity != null ? state.identity.node_name : "VRESQ-UNIT");
+                float normHdg = ((_lastHeadingDeg % 360f) + 360f) % 360f;
+                mapCoordsText.text = $"X: {_poseX:+0.00;-0.00}m   Y: {_poseY:+0.00;-0.00}m\nHDG: {normHdg:000}°  |  CAM: {_lastServoDeg:000}°  |  {rName.ToUpper()}";
             }
         }
 
@@ -109,41 +113,43 @@ namespace VResQ.Core
         {
             if (_radarTexture == null) return;
 
-            // Rotate radar sweep beam
             _currentSweepAngle = (_currentSweepAngle + (sweepSpeedDegPerSec * Time.deltaTime)) % 360f;
-
-            // Render Radar frame
             Array.Copy(_clearBuffer, _renderBuffer, _clearBuffer.Length);
 
             int cx = textureSize / 2;
             int cy = textureSize / 2;
             int maxRadius = (textureSize / 2) - 10;
 
-            // 1. Draw Range Rings (0.75m, 1.5m, 2.25m, 3.0m)
+            // 1. Range Rings
             DrawCircle(cx, cy, (int)(maxRadius * 0.25f), _gridColor);
             DrawCircle(cx, cy, (int)(maxRadius * 0.50f), _gridColor);
             DrawCircle(cx, cy, (int)(maxRadius * 0.75f), _gridColor);
             DrawCircle(cx, cy, maxRadius, _axisColor);
 
-            // 2. Draw Crosshairs
+            // 2. Crosshairs
             DrawLine(cx - maxRadius, cy, cx + maxRadius, cy, _gridColor);
             DrawLine(cx, cy - maxRadius, cx, cy + maxRadius, _gridColor);
 
-            // 3. Draw Radar Sweep Beam Line
+            // 3. Camera Servo Gimbal FOV Cone (90 = straight up +Y)
+            float servoOffset = _lastServoDeg - 90f;
+            float centerCamAngle = 90f - servoOffset;
+            float leftRay = (centerCamAngle + 28f) * Mathf.Deg2Rad;
+            float rightRay = (centerCamAngle - 28f) * Mathf.Deg2Rad;
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(leftRay) * maxRadius * 0.85f), cy + (int)(Mathf.Sin(leftRay) * maxRadius * 0.85f), _fovColor);
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(rightRay) * maxRadius * 0.85f), cy + (int)(Mathf.Sin(rightRay) * maxRadius * 0.85f), _fovColor);
+
+            // 4. Rotating Radar Sweep Beam
             float sweepRad = _currentSweepAngle * Mathf.Deg2Rad;
             int sweepX = cx + (int)(Mathf.Cos(sweepRad) * maxRadius);
             int sweepY = cy + (int)(Mathf.Sin(sweepRad) * maxRadius);
             DrawLine(cx, cy, sweepX, sweepY, _sweepColor);
 
-            // 4. Draw Ultrasonic Obstacle Blip
+            // 5. Ultrasonic Obstacle Blip
             if (_lastUltrasonicCm > 2f && _lastUltrasonicCm < (maxRangeMeters * 100f))
             {
                 float distRatio = Mathf.Clamp01((_lastUltrasonicCm / 100f) / maxRangeMeters);
                 int rDist = (int)(distRatio * maxRadius);
-
-                // Servo angle relative to forward (90 = straight ahead, 0-180)
-                float servoOffset = (_lastServoDeg - 90f);
-                float obsAngle = (90f - servoOffset) * Mathf.Deg2Rad;
+                float obsAngle = centerCamAngle * Mathf.Deg2Rad;
 
                 int ox = cx + (int)(Mathf.Cos(obsAngle) * rDist);
                 int oy = cy + (int)(Mathf.Sin(obsAngle) * rDist);
@@ -151,27 +157,29 @@ namespace VResQ.Core
                 Color32 obsCol = (_lastUltrasonicCm < 25f) ? _alertObstacleColor :
                                  (_lastUltrasonicCm < 60f) ? _cautionObstacleColor : _safeObstacleColor;
 
-                DrawSolidCircle(ox, oy, 4, obsCol);
+                DrawSolidCircle(ox, oy, 5, obsCol);
             }
 
-            // 5. Draw Swarm Peers
-            if (VResqClient.Instance != null && VResqClient.Instance.DiscoveredSwarmPeers != null)
+            // 6. Swarm Peer Markers
+            var cfg = VResqFrameworkConfig.Instance;
+            if (cfg != null && cfg.Profile.fleetNodes != null)
             {
-                int peerIndex = 1;
-                foreach (var peer in VResqClient.Instance.DiscoveredSwarmPeers)
+                for (int i = 0; i < cfg.Profile.fleetNodes.Length; i++)
                 {
-                    // Spread peers visually on the radar based on their index
-                    float peerAngle = (peerIndex * 115f) * Mathf.Deg2Rad;
-                    int px = cx + (int)(Mathf.Cos(peerAngle) * (maxRadius * 0.7f));
-                    int py = cy + (int)(Mathf.Sin(peerAngle) * (maxRadius * 0.7f));
-                    DrawSolidCircle(px, py, 3, _peerColor);
-                    peerIndex++;
+                    var node = cfg.Profile.fleetNodes[i];
+                    if (VResqClient.Instance != null && i == VResqClient.Instance.ActiveNodeIndex) continue;
+                    if (!node.isOnline) continue;
+
+                    float peerAngle = (45f + i * 95f) * Mathf.Deg2Rad;
+                    int px = cx + (int)(Mathf.Cos(peerAngle) * (maxRadius * 0.65f));
+                    int py = cy + (int)(Mathf.Sin(peerAngle) * (maxRadius * 0.65f));
+                    DrawSolidCircle(px, py, 4, _peerOnlineColor);
                 }
             }
 
-            // 6. Draw Robot Center Marker (Arrow & Dot)
-            DrawSolidCircle(cx, cy, 3, _robotColor);
-            DrawLine(cx, cy, cx, cy + 12, _robotColor); // forward indicator
+            // 7. Robot Center Marker
+            DrawSolidCircle(cx, cy, 4, _robotColor);
+            DrawLine(cx, cy, cx, cy + 14, _robotColor);
 
             _radarTexture.SetPixels32(_renderBuffer);
             _radarTexture.Apply();
