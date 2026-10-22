@@ -97,7 +97,8 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void Awake()
     {
-        _config = GetComponent<VResqFrameworkConfig>() ?? gameObject.AddComponent<VResqFrameworkConfig>();
+        _config = GetComponent<VResqFrameworkConfig>();
+        if (_config == null) _config = gameObject.AddComponent<VResqFrameworkConfig>();
 
         var client = GetComponent<VResqClient>();
         if (client == null)
@@ -107,9 +108,14 @@ public class RescueRobotVRHUD : MonoBehaviour
             client.port = 8000;
         }
 
-        _cameraReceiver = GetComponent<VResqCameraReceiver>() ?? gameObject.AddComponent<VResqCameraReceiver>();
-        _teleop = GetComponent<VResqTeleopController>() ?? gameObject.AddComponent<VResqTeleopController>();
-        surroundDisplay = GetComponent<VResqSurroundDisplay>() ?? gameObject.AddComponent<VResqSurroundDisplay>();
+        _cameraReceiver = GetComponent<VResqCameraReceiver>();
+        if (_cameraReceiver == null) _cameraReceiver = gameObject.AddComponent<VResqCameraReceiver>();
+
+        _teleop = GetComponent<VResqTeleopController>();
+        if (_teleop == null) _teleop = gameObject.AddComponent<VResqTeleopController>();
+
+        surroundDisplay = GetComponent<VResqSurroundDisplay>();
+        if (surroundDisplay == null) surroundDisplay = gameObject.AddComponent<VResqSurroundDisplay>();
 
         if (_cameraReceiver != null)
         {
@@ -445,8 +451,26 @@ public class RescueRobotVRHUD : MonoBehaviour
         {
             float rtt = VResqClient.Instance.LatencyMs;
             float camFps = _cameraReceiver != null ? _cameraReceiver.StreamFps : 0f;
-            latencyText.text = $"DASHBOARD OK  |  RTT: {rtt:F0} ms  |  VIDEO: {camFps:F0} FPS";
+            int frames = _cameraReceiver != null ? _cameraReceiver.FramesReceived : 0;
+            string camStr = frames > 0 ? $"VIDEO: {Mathf.Max(1f, camFps):F0} FPS (LIVE)" : "VIDEO: CONNECTING...";
+            latencyText.text = $"ONLINE  |  RTT: {rtt:F0} ms  |  {camStr}";
             latencyText.color = new Color(0f, 1f, 0.5f, 1f);
+        }
+
+        // Ensure current node is marked online in Fleet Cards whenever state is received
+        if (_config != null && _config.Profile.fleetNodes != null && VResqClient.Instance != null)
+        {
+            int idx = VResqClient.Instance.ActiveNodeIndex;
+            if (idx >= 0 && idx < _config.Profile.fleetNodes.Length)
+            {
+                var fn = _config.Profile.fleetNodes[idx];
+                fn.isOnline = true;
+                fn.lastRttMs = VResqClient.Instance.LatencyMs;
+                if (!string.IsNullOrEmpty(rName)) fn.remoteNodeName = rName;
+                if (!string.IsNullOrEmpty(role)) fn.remoteRole = role;
+                if (s.ai_config != null) fn.detectorFps = s.ai_config.detector_fps;
+                RefreshFleetNodeCards();
+            }
         }
 
         // 2. Web Dashboard Ops Strip & 6-Sensor Strip

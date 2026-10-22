@@ -96,7 +96,7 @@ namespace VResQ.Video
             ApplyGeometryAndMode();
         }
 
-        private void EnsureSurroundScreenReady(bool forceRebuildMesh = false)
+        public void EnsureSurroundScreenReady(bool forceRebuildMesh = false)
         {
             if (_screenObject == null)
             {
@@ -114,26 +114,42 @@ namespace VResQ.Video
 
             if (_meshFilter == null)
             {
-                _meshFilter = _screenObject.GetComponent<MeshFilter>() ?? _screenObject.AddComponent<MeshFilter>();
+                _meshFilter = _screenObject.GetComponent<MeshFilter>();
+                if (_meshFilter == null)
+                {
+                    _meshFilter = _screenObject.AddComponent<MeshFilter>();
+                }
             }
             if (_meshRenderer == null)
             {
-                _meshRenderer = _screenObject.GetComponent<MeshRenderer>() ?? _screenObject.AddComponent<MeshRenderer>();
+                _meshRenderer = _screenObject.GetComponent<MeshRenderer>();
+                if (_meshRenderer == null)
+                {
+                    _meshRenderer = _screenObject.AddComponent<MeshRenderer>();
+                }
             }
 
             if (_runtimeMaterial == null || _meshRenderer.sharedMaterial == null)
             {
-                Shader shader = Shader.Find("Sprites/Default") ??
-                                Shader.Find("Unlit/Texture") ??
-                                Shader.Find("Universal Render Pipeline/Unlit");
+                Shader shader = Shader.Find("Unlit/Texture");
+                if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
+                if (shader == null) shader = Shader.Find("Sprites/Default");
 
-                _runtimeMaterial = surroundMaterial != null ? new Material(surroundMaterial) : new Material(shader);
+                _runtimeMaterial = new Material(shader);
                 _runtimeMaterial.name = "SurroundScreen_RuntimeMaterial";
                 _runtimeMaterial.color = Color.white;
 
+                if (_runtimeMaterial.HasProperty("_Color"))
+                {
+                    _runtimeMaterial.SetColor("_Color", Color.white);
+                }
                 if (_runtimeMaterial.HasProperty("_BaseColor"))
                 {
                     _runtimeMaterial.SetColor("_BaseColor", Color.white);
+                }
+                if (_runtimeMaterial.HasProperty("_RendererColor"))
+                {
+                    _runtimeMaterial.SetColor("_RendererColor", Color.white);
                 }
                 if (_runtimeMaterial.HasProperty("_Cull"))
                 {

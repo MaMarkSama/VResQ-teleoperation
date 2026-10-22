@@ -39,7 +39,7 @@ namespace VResQ.Core
             new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "WINGMAN", ipAddress = "10.66.68.10", port = 8000 },
             new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "10.66.68.82", port = 8000 }
         };
-        public int defaultNodeIndex = 0;
+        public int defaultNodeIndex = 2;
         public bool autoFallbackToOnlineNode = true;
         public float fleetProbeIntervalSec = 2.5f;
 

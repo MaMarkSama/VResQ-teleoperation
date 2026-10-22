@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
@@ -15,15 +14,15 @@ namespace VResQ.Core
     /// <summary>
     /// Master Network Manager for Unity VR & Surround Cockpit.
     /// Connects to V-ResQ FastAPI Backend (/ws, /api/state, /api/swarm, /api/action).
-    /// Features instant parallel multi-node health probing (10.66.68.52, 10.66.68.10, 10.66.68.82)
-    /// and automatic failover to whichever robot node is online.
+    /// All Unity JsonUtility calls are strictly executed on the Unity Main Thread so background
+    /// WebSocket and HTTP tasks never throw main-thread UnityExceptions.
     /// </summary>
     public class VResqClient : MonoBehaviour
     {
         public static VResqClient Instance { get; private set; }
 
         [Header("Target Robot Connection")]
-        [Tooltip("IP Address of target robot (10.66.68.52, 10.66.68.10, 10.66.68.82)")]
+        [Tooltip("IP Address of target robot (10.66.68.82, 10.66.68.10, 10.66.68.52)")]
         public string robotIp = "10.66.68.82";
 
         [Tooltip("HTTP & WebSocket Port (Default: 8000)")]
@@ -39,10 +38,10 @@ namespace VResQ.Core
         [SerializeField] private bool isConnected = false;
         public bool IsConnected => isConnected;
 
-        [SerializeField] private int activeNodeIndex = 0;
+        [SerializeField] private int activeNodeIndex = 2;
         public int ActiveNodeIndex => activeNodeIndex;
 
-        [SerializeField] private float latencyMs = 0f;
+        [SerializeField] private float latencyMs = 18f;
         public float LatencyMs => latencyMs;
 
         [Header("Swarm Mesh Telemetry")]
@@ -56,10 +55,11 @@ namespace VResQ.Core
         public UnityEvent<string> OnRobotSwitched = new UnityEvent<string>();
         public UnityEvent OnFleetUpdated = new UnityEvent();
 
-        private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromMilliseconds(1800) };
+        private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromMilliseconds(2000) };
 
         private ClientWebSocket _webSocket;
         private CancellationTokenSource _cts;
+        private readonly SemaphoreSlim _wsSendLock = new SemaphoreSlim(1, 1);
         private readonly Queue<Action> _mainThreadQueue = new Queue<Action>();
         private readonly object _queueLock = new object();
         private RobotStateSnapshot _latestState = new RobotStateSnapshot();
@@ -68,6 +68,7 @@ namespace VResQ.Core
         private float _swarmPollTimer = 0f;
         private float _fleetProbeTimer = 0f;
         private float _stateFallbackPollTimer = 0f;
+        private float _wsHeartbeatTimer = 0f;
         private float _lastStateReceivedRealtime = 0f;
         private bool _probingFleet = false;
         private bool _pollingStateHttp = false;
@@ -86,8 +87,10 @@ namespace VResQ.Core
         {
             SyncWithFrameworkConfig();
 
-            // Immediately probe all fleet nodes in parallel so we lock onto the online robot within 0.3s
+            // Immediately probe all fleet nodes in parallel and poll initial state
             _ = ProbeFleetNodesAsync(initialStartup: true);
+            _ = PollStateFallbackAsync();
+            _ = PollSwarmPeersAsync();
 
             if (connectOnStart)
             {
@@ -109,13 +112,7 @@ namespace VResQ.Core
 
         private void Update()
         {
-            lock (_queueLock)
-            {
-                while (_mainThreadQueue.Count > 0)
-                {
-                    _mainThreadQueue.Dequeue()?.Invoke();
-                }
-            }
+            PumpMainThreadQueue();
 
             // 1. Periodic Swarm API Poll every 2.5 seconds
             _swarmPollTimer += Time.deltaTime;
@@ -133,12 +130,45 @@ namespace VResQ.Core
                 _ = ProbeFleetNodesAsync(initialStartup: false);
             }
 
-            // 3. HTTP /api/state fallback poll if WebSocket hasn't pushed state in > 0.4s
+            // 3. HTTP /api/state poll every 0.25s if WebSocket hasn't pushed state recently
             _stateFallbackPollTimer += Time.deltaTime;
-            if (_stateFallbackPollTimer >= 0.4f && !_pollingStateHttp && (Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.35f))
+            if (_stateFallbackPollTimer >= 0.25f && !_pollingStateHttp && (Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.20f))
             {
                 _stateFallbackPollTimer = 0f;
                 _ = PollStateFallbackAsync();
+            }
+
+            // 4. WebSocket state keepalive request if idle (FastAPI /ws replies with state on incoming message)
+            _wsHeartbeatTimer += Time.deltaTime;
+            if (_wsHeartbeatTimer >= 0.15f && _webSocket != null && _webSocket.State == WebSocketState.Open && (Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.14f))
+            {
+                _wsHeartbeatTimer = 0f;
+                string pingJson = "{\"type\":\"ping\"}";
+                Task.Run(() => SendRawJsonAsync(pingJson));
+            }
+        }
+
+        public void PumpMainThreadQueue()
+        {
+            while (true)
+            {
+                Action action = null;
+                lock (_queueLock)
+                {
+                    if (_mainThreadQueue.Count > 0)
+                    {
+                        action = _mainThreadQueue.Dequeue();
+                    }
+                }
+                if (action == null) break;
+                try
+                {
+                    action.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[VResQ MainThreadQueue] {ex.Message}");
+                }
             }
         }
 
@@ -151,7 +181,9 @@ namespace VResQ.Core
         {
             _cts?.Cancel();
             _cts = new CancellationTokenSource();
-            Task.Run(() => WebSocketLoopAsync(_cts.Token));
+            string ip = robotIp;
+            int p = port;
+            Task.Run(() => WebSocketLoopAsync(ip, p, _cts.Token));
         }
 
         public void Disconnect()
@@ -233,6 +265,7 @@ namespace VResQ.Core
         {
             if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
 
+            // Serialize on Unity Main Thread
             var payload = new ControlPayload
             {
                 linear = Mathf.Clamp(linear, -1f, 1f),
@@ -254,13 +287,13 @@ namespace VResQ.Core
 
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
             {
+                // Serialize on Unity Main Thread
                 var payload = new ActionPayload { action = action };
                 string json = payload.ToJson();
                 Task.Run(() => SendRawJsonAsync(json));
             }
             else
             {
-                // HTTP POST fallback just like Web Dashboard app.js
                 string url = $"http://{robotIp}:{port}/api/action/{Uri.EscapeDataString(action)}";
                 Task.Run(async () =>
                 {
@@ -277,12 +310,22 @@ namespace VResQ.Core
             {
                 Task.Run(() => SendRawJsonAsync(json));
             }
+            string url = $"http://{robotIp}:{port}/api/oled/{safePage}";
+            Task.Run(async () =>
+            {
+                try { await _httpClient.PostAsync(url, new StringContent("")); } catch { }
+            });
         }
 
         private async Task SendRawJsonAsync(string json)
         {
+            if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+
+            bool locked = false;
             try
             {
+                await _wsSendLock.WaitAsync(500);
+                locked = true;
                 if (_webSocket != null && _webSocket.State == WebSocketState.Open)
                 {
                     byte[] bytes = Encoding.UTF8.GetBytes(json);
@@ -290,29 +333,35 @@ namespace VResQ.Core
                 }
             }
             catch { }
+            finally
+            {
+                if (locked) _wsSendLock.Release();
+            }
         }
 
-        private async Task WebSocketLoopAsync(CancellationToken token)
+        private async Task WebSocketLoopAsync(string targetIp, int targetPort, CancellationToken token)
         {
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    string targetIp = robotIp;
-                    int targetPort = port;
                     string wsUrl = $"ws://{targetIp}:{targetPort}/ws";
 
-                    _webSocket = new ClientWebSocket();
-                    _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+                    var ws = new ClientWebSocket();
+                    ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+                    _webSocket = ws;
 
                     using (var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2.5f)))
                     using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, connectTimeoutCts.Token))
                     {
-                        await _webSocket.ConnectAsync(new Uri(wsUrl), linkedCts.Token);
+                        await ws.ConnectAsync(new Uri(wsUrl), linkedCts.Token);
                     }
 
                     SetConnected(true);
-                    Debug.Log($"<color=green>[VResQ]</color> WebSocket CONNECTED to {targetIp}:{targetPort}!");
+                    EnqueueMainThread(() =>
+                    {
+                        Debug.Log($"<color=green>[VResQ]</color> WebSocket CONNECTED to {targetIp}:{targetPort}!");
+                    });
 
                     // Send initial control packet so FastAPI /ws immediately responds with state
                     string initMsg = "{\"type\":\"control\",\"linear\":0,\"angular\":0,\"servo\":90,\"speed\":0.75,\"estop\":false,\"buzzer\":false}";
@@ -321,17 +370,17 @@ namespace VResQ.Core
                     byte[] buffer = new byte[32768];
                     var ms = new MemoryStream();
 
-                    while (_webSocket != null && _webSocket.State == WebSocketState.Open && !token.IsCancellationRequested)
+                    while (ws != null && ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                     {
                         WebSocketReceiveResult result;
                         ms.SetLength(0);
 
                         do
                         {
-                            result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), token);
+                            result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
                             if (result.MessageType == WebSocketMessageType.Close)
                             {
-                                await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                                await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
                                 break;
                             }
                             ms.Write(buffer, 0, result.Count);
@@ -340,7 +389,8 @@ namespace VResQ.Core
                         if (result.MessageType == WebSocketMessageType.Text && ms.Length > 0)
                         {
                             string rawJson = Encoding.UTF8.GetString(ms.ToArray());
-                            ProcessIncomingJson(rawJson);
+                            // IMPORTANT: Always parse JsonUtility on the Unity Main Thread!
+                            EnqueueMainThread(() => ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: true));
                         }
                     }
                 }
@@ -350,11 +400,10 @@ namespace VResQ.Core
                 }
                 catch (Exception)
                 {
-                    // Handled seamlessly by ProbeFleetNodesAsync & autoReconnect
+                    // Handled seamlessly by HTTP fallback & ProbeFleetNodesAsync
                 }
                 finally
                 {
-                    SetConnected(false);
                     if (_webSocket != null)
                     {
                         try { _webSocket.Dispose(); } catch { }
@@ -364,10 +413,12 @@ namespace VResQ.Core
 
                 if (!autoReconnect || token.IsCancellationRequested) break;
                 await Task.Delay(1200, token);
+                targetIp = robotIp;
+                targetPort = port;
             }
         }
 
-        private void ProcessIncomingJson(string rawJson)
+        private void ProcessIncomingJsonOnMainThread(string rawJson, bool updateRttFromDelta)
         {
             if (string.IsNullOrEmpty(rawJson)) return;
 
@@ -396,22 +447,16 @@ namespace VResQ.Core
                     state.ParseRadarPoints(rawJson);
                     _latestState = state;
 
-                    EnqueueMainThread(() =>
+                    float now = Time.realtimeSinceStartup;
+                    if (updateRttFromDelta && _lastStateReceivedRealtime > 0f)
                     {
-                        float now = Time.realtimeSinceStartup;
-                        if (_lastStateReceivedRealtime > 0f)
-                        {
-                            float deltaMs = (now - _lastStateReceivedRealtime) * 1000f;
-                            latencyMs = Mathf.Lerp(latencyMs, Mathf.Clamp(deltaMs, 8f, 160f), 0.25f);
-                        }
-                        else
-                        {
-                            latencyMs = 22f;
-                        }
-                        _lastStateReceivedRealtime = now;
-                        if (!isConnected) SetConnected(true);
-                        OnStateReceived?.Invoke(_latestState);
-                    });
+                        float deltaMs = (now - _lastStateReceivedRealtime) * 1000f;
+                        latencyMs = Mathf.Lerp(latencyMs, Mathf.Clamp(deltaMs, 8f, 160f), 0.25f);
+                    }
+                    _lastStateReceivedRealtime = now;
+
+                    if (!isConnected) SetConnected(true);
+                    OnStateReceived?.Invoke(_latestState);
                 }
             }
             catch (Exception ex)
@@ -422,15 +467,15 @@ namespace VResQ.Core
 
         private void SetConnected(bool connected)
         {
-            if (isConnected != connected)
+            EnqueueMainThread(() =>
             {
-                isConnected = connected;
-                EnqueueMainThread(() =>
+                if (isConnected != connected)
                 {
+                    isConnected = connected;
                     if (isConnected) OnConnected?.Invoke();
                     else OnDisconnected?.Invoke();
-                });
-            }
+                }
+            });
         }
 
         private async Task PollStateFallbackAsync()
@@ -438,17 +483,21 @@ namespace VResQ.Core
             _pollingStateHttp = true;
             try
             {
-                string url = $"http://{robotIp}:{port}/api/state";
+                string targetIp = robotIp;
+                int targetPort = port;
+                string url = $"http://{targetIp}:{targetPort}/api/state";
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 string json = await _httpClient.GetStringAsync(url);
                 sw.Stop();
+                long rtt = sw.ElapsedMilliseconds;
+
                 if (!string.IsNullOrEmpty(json))
                 {
                     EnqueueMainThread(() =>
                     {
-                        latencyMs = sw.ElapsedMilliseconds;
+                        latencyMs = rtt;
+                        ProcessIncomingJsonOnMainThread(json, updateRttFromDelta: false);
                     });
-                    ProcessIncomingJson(json);
                 }
             }
             catch { }
@@ -465,52 +514,79 @@ namespace VResQ.Core
 
             _probingFleet = true;
             var nodes = cfg.Profile.fleetNodes;
+            int count = nodes.Length;
 
-            Task[] tasks = new Task[nodes.Length];
-            for (int i = 0; i < nodes.Length; i++)
+            bool[] onlineResults = new bool[count];
+            float[] rttResults = new float[count];
+            string[] jsonResults = new string[count];
+
+            Task[] tasks = new Task[count];
+            for (int i = 0; i < count; i++)
             {
                 int idx = i;
+                string ip = nodes[idx].ipAddress;
+                int p = nodes[idx].port;
+
                 tasks[i] = Task.Run(async () =>
                 {
-                    var node = nodes[idx];
-                    if (string.IsNullOrEmpty(node.ipAddress)) return;
-                    string url = $"http://{node.ipAddress}:{node.port}/api/state";
+                    if (string.IsNullOrEmpty(ip)) return;
+                    string url = $"http://{ip}:{p}/api/state";
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     try
                     {
                         string txt = await _httpClient.GetStringAsync(url);
                         sw.Stop();
-                        node.isOnline = true;
-                        node.lastRttMs = sw.ElapsedMilliseconds;
-
-                        var snap = JsonUtility.FromJson<RobotStateSnapshot>(txt);
-                        if (snap != null)
+                        if (!string.IsNullOrEmpty(txt))
                         {
-                            var id = (snap.identity != null && !string.IsNullOrEmpty(snap.identity.node_name)) ? snap.identity : snap.node_info;
-                            if (id != null)
-                            {
-                                node.remoteNodeName = !string.IsNullOrEmpty(id.node_name) ? id.node_name : id.name;
-                                node.remoteRole = id.role;
-                            }
-                            if (snap.ai_config != null)
-                            {
-                                node.detectorFps = snap.ai_config.detector_fps;
-                            }
+                            onlineResults[idx] = true;
+                            rttResults[idx] = sw.ElapsedMilliseconds;
+                            jsonResults[idx] = txt;
                         }
                     }
                     catch
                     {
-                        node.isOnline = false;
-                        node.lastRttMs = 0f;
+                        onlineResults[idx] = false;
+                        rttResults[idx] = 0f;
+                        jsonResults[idx] = null;
                     }
                 });
             }
 
             await Task.WhenAll(tasks);
 
+            // Parse all JSON responses on the Unity Main Thread!
             EnqueueMainThread(() =>
             {
-                // Seamless auto-failover if current node is offline and another fleet node is online
+                for (int i = 0; i < count && i < nodes.Length; i++)
+                {
+                    var node = nodes[i];
+                    node.isOnline = onlineResults[i];
+                    node.lastRttMs = rttResults[i];
+
+                    if (onlineResults[i] && !string.IsNullOrEmpty(jsonResults[i]))
+                    {
+                        try
+                        {
+                            var snap = JsonUtility.FromJson<RobotStateSnapshot>(jsonResults[i]);
+                            if (snap != null)
+                            {
+                                var id = (snap.identity != null && !string.IsNullOrEmpty(snap.identity.node_name)) ? snap.identity : snap.node_info;
+                                if (id != null)
+                                {
+                                    node.remoteNodeName = !string.IsNullOrEmpty(id.node_name) ? id.node_name : id.name;
+                                    node.remoteRole = id.role;
+                                }
+                                if (snap.ai_config != null)
+                                {
+                                    node.detectorFps = snap.ai_config.detector_fps;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                // Check if current target robot is online
                 bool currentOnline = false;
                 for (int i = 0; i < nodes.Length; i++)
                 {
@@ -521,16 +597,35 @@ namespace VResQ.Core
                     }
                 }
 
+                // If current node is offline, auto-failover to the best online node
+                // (preferring online nodes with active camera/AI detectorFps > 0 like 10.66.68.82)
                 if (!currentOnline && (cfg.Profile.autoFallbackToOnlineNode || initialStartup))
                 {
+                    int bestIdx = -1;
                     for (int i = 0; i < nodes.Length; i++)
                     {
-                        if (nodes[i].isOnline)
+                        if (nodes[i].isOnline && nodes[i].detectorFps > 0.1f)
                         {
-                            Debug.Log($"<color=cyan>[VResQ Seamless Auto-Failover]</color> Target {robotIp} offline -> switching to online {nodes[i].displayName} ({nodes[i].ipAddress})!");
-                            SwitchToNodeIndex(i);
+                            bestIdx = i;
                             break;
                         }
+                    }
+                    if (bestIdx < 0)
+                    {
+                        for (int i = 0; i < nodes.Length; i++)
+                        {
+                            if (nodes[i].isOnline)
+                            {
+                                bestIdx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (bestIdx >= 0)
+                    {
+                        Debug.Log($"<color=cyan>[VResQ Seamless Auto-Failover]</color> Target {robotIp} offline -> switching to online {nodes[bestIdx].displayName} ({nodes[bestIdx].ipAddress})!");
+                        SwitchToNodeIndex(bestIdx);
                     }
                 }
 

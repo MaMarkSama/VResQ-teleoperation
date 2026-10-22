@@ -531,6 +531,7 @@ public class HUDBuilderEditor : EditorWindow
 
         ctrl.WireAllInteractiveButtons();
         ctrl.ApplyFrameworkVisuals();
+        surround.EnsureSurroundScreenReady(forceRebuildMesh: true);
 
         EditorUtility.SetDirty(hudRoot);
         var activeScene = EditorSceneManager.GetActiveScene();
@@ -538,7 +539,50 @@ public class HUDBuilderEditor : EditorWindow
         EditorSceneManager.SaveScene(activeScene);
 
         Selection.activeGameObject = hudRoot;
-        Debug.Log("<color=cyan>[V-ResQ Framework]</color> Rebuilt Open-Visor Surround HUD with 100% Web Dashboard Parity & Live Surround Video!");
+        Debug.Log($"<color=cyan>[V-ResQ Framework]</color> Rebuilt Open-Visor Surround HUD in {activeScene.path}!");
+    }
+
+    public static void RebuildAndVerifyRuntime()
+    {
+        // 1. Rebuild BasicScene.unity if it exists
+        if (System.IO.File.Exists("Assets/Scenes/BasicScene.unity"))
+        {
+            EditorSceneManager.OpenScene("Assets/Scenes/BasicScene.unity");
+            RebuildSceneCleanly();
+        }
+
+        // 2. Rebuild SampleScene.unity and keep it as the active scene
+        EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
+        RebuildSceneCleanly();
+
+        // 3. Live Runtime Verification Test inside Unity's Mono Runtime
+        var client = Object.FindFirstObjectByType<VResqClient>();
+        var cam = Object.FindFirstObjectByType<VResqCameraReceiver>();
+        var surround = Object.FindFirstObjectByType<VResqSurroundDisplay>();
+
+        if (client != null && cam != null && surround != null)
+        {
+            client.Connect();
+            cam.StartStream();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 2800)
+            {
+                System.Threading.Thread.Sleep(40);
+                client.PumpMainThreadQueue();
+                cam.PumpFrameUpdate();
+            }
+
+            string nodeName = client.LatestState != null && client.LatestState.identity != null
+                ? client.LatestState.identity.node_name
+                : "none";
+            int texW = cam.VideoTexture != null ? cam.VideoTexture.width : 0;
+            int texH = cam.VideoTexture != null ? cam.VideoTexture.height : 0;
+
+            Debug.Log($"[VRESQ_VERIFY] Connected={client.IsConnected}, ActiveRobot={client.robotIp}, NodeName={nodeName}, CamFramesDecoded={cam.FramesReceived}, HasLiveFrame={cam.HasReceivedLiveFrame}, TexSize={texW}x{texH}");
+
+            cam.StopStream();
+            client.Disconnect();
+        }
     }
 
     private static void SetupExternal3DWorldEnvironment()
@@ -547,7 +591,8 @@ public class HUDBuilderEditor : EditorWindow
         if (oldEnv != null) DestroyImmediate(oldEnv);
 
         GameObject envRoot = new GameObject("External_3D_World_Environment");
-        Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        Shader litShader = Shader.Find("Universal Render Pipeline/Lit");
+        if (litShader == null) litShader = Shader.Find("Standard");
 
         GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
         floor.name = "Tactical_Rescue_Floor";
