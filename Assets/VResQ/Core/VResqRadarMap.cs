@@ -7,8 +7,8 @@ using TMPro;
 namespace VResQ.Core
 {
     /// <summary>
-    /// Interactive 2D Tactical Radar & Coordinate Map for LeftPanel_Map.
-    /// Plots camera FOV cone, ultrasonic distance, rotating sweep beam, robot heading, and swarm fleet nodes.
+    /// Interactive 2D Tactical Radar & Local Odometry Map matching the Web Dashboard's mapCanvas & Radar Twin.
+    /// Plots robot pose (pose_x, pose_y), breadcrumb trail, servo beam (servo_deg), ultrasonic obstacles, and swarm peers.
     /// </summary>
     public class VResqRadarMap : MonoBehaviour
     {
@@ -31,11 +31,13 @@ namespace VResQ.Core
         private int _lastServoDeg = 90;
         private float _poseX = 0f;
         private float _poseY = 0f;
+        private readonly List<Vector2> _trailPoints = new List<Vector2>();
 
         private readonly Color32 _bgColor = new Color32(5, 13, 24, 245);
         private readonly Color32 _gridColor = new Color32(0, 175, 230, 58);
         private readonly Color32 _axisColor = new Color32(0, 225, 255, 115);
-        private readonly Color32 _fovColor = new Color32(0, 210, 255, 95);
+        private readonly Color32 _fovColor = new Color32(0, 210, 255, 120);
+        private readonly Color32 _trailColor = new Color32(0, 255, 170, 165);
         private readonly Color32 _sweepColor = new Color32(0, 255, 195, 190);
         private readonly Color32 _robotColor = new Color32(0, 255, 120, 255);
         private readonly Color32 _alertObstacleColor = new Color32(255, 45, 55, 255);
@@ -85,27 +87,48 @@ namespace VResQ.Core
             }
         }
 
+        public void ResetTrail()
+        {
+            _trailPoints.Clear();
+        }
+
         private void OnRobotStateReceived(RobotStateSnapshot state)
         {
             if (state == null) return;
 
+            _lastServoDeg = state.servo_deg > 0 ? state.servo_deg : (state.telemetry != null ? state.telemetry.servo_deg : 90);
+
             if (state.telemetry != null)
             {
                 _lastUltrasonicCm = state.telemetry.ultrasonic_cm;
-                _lastHeadingDeg = state.telemetry.yaw_deg;
-                _lastServoDeg = state.telemetry.servo_deg > 0 ? state.telemetry.servo_deg : state.servo_deg;
+                // Use MPU6050 yaw_deg if non-zero, otherwise convert pose_heading (radians) just like Web Dashboard app.js
+                if (Mathf.Abs(state.telemetry.yaw_deg) > 0.01f)
+                {
+                    _lastHeadingDeg = state.telemetry.yaw_deg;
+                }
+                else
+                {
+                    _lastHeadingDeg = state.pose_heading * Mathf.Rad2Deg;
+                }
             }
 
             _poseX = state.pose_x;
             _poseY = state.pose_y;
 
+            Vector2 curPose = new Vector2(_poseX, _poseY);
+            if (_trailPoints.Count == 0 || Vector2.Distance(_trailPoints[_trailPoints.Count - 1], curPose) > 0.15f)
+            {
+                _trailPoints.Add(curPose);
+                if (_trailPoints.Count > 80) _trailPoints.RemoveAt(0);
+            }
+
             if (mapCoordsText != null)
             {
-                string rName = (state.node_info != null && !string.IsNullOrEmpty(state.node_info.node_name))
-                    ? state.node_info.node_name
-                    : (state.identity != null ? state.identity.node_name : "VRESQ-UNIT");
+                string rName = (state.identity != null && !string.IsNullOrEmpty(state.identity.node_name))
+                    ? state.identity.node_name
+                    : (state.node_info != null && !string.IsNullOrEmpty(state.node_info.node_name) ? state.node_info.node_name : "VRESQ-UNIT");
                 float normHdg = ((_lastHeadingDeg % 360f) + 360f) % 360f;
-                mapCoordsText.text = $"X: {_poseX:+0.00;-0.00}m   Y: {_poseY:+0.00;-0.00}m\nHDG: {normHdg:000}°  |  CAM: {_lastServoDeg:000}°  |  {rName.ToUpper()}";
+                mapCoordsText.text = $"POSE: X {_poseX:+0.00;-0.00}m   Y {_poseY:+0.00;-0.00}m\nHDG: {normHdg:000.0}°  |  SERVO: {_lastServoDeg:000}°  |  {rName.ToUpper()}";
             }
         }
 
@@ -121,46 +144,62 @@ namespace VResQ.Core
             int maxRadius = (textureSize / 2) - 10;
 
             // 1. Range Rings
-            DrawCircle(cx, cy, (int)(maxRadius * 0.25f), _gridColor);
-            DrawCircle(cx, cy, (int)(maxRadius * 0.50f), _gridColor);
-            DrawCircle(cx, cy, (int)(maxRadius * 0.75f), _gridColor);
+            DrawCircle(cx, cy, (int)(maxRadius * 0.33f), _gridColor);
+            DrawCircle(cx, cy, (int)(maxRadius * 0.66f), _gridColor);
             DrawCircle(cx, cy, maxRadius, _axisColor);
 
             // 2. Crosshairs
             DrawLine(cx - maxRadius, cy, cx + maxRadius, cy, _gridColor);
             DrawLine(cx, cy - maxRadius, cx, cy + maxRadius, _gridColor);
 
-            // 3. Camera Servo Gimbal FOV Cone (90 = straight up +Y)
+            // 3. Breadcrumb Odometry Trail (relative to current pose)
+            if (_trailPoints.Count > 1)
+            {
+                float mapScale = 6.0f; // pixels per unit
+                for (int i = 1; i < _trailPoints.Count; i++)
+                {
+                    Vector2 p0 = _trailPoints[i - 1] - new Vector2(_poseX, _poseY);
+                    Vector2 p1 = _trailPoints[i] - new Vector2(_poseX, _poseY);
+                    int x0 = cx + Mathf.RoundToInt(p0.x * mapScale);
+                    int y0 = cy + Mathf.RoundToInt(p0.y * mapScale);
+                    int x1 = cx + Mathf.RoundToInt(p1.x * mapScale);
+                    int y1 = cy + Mathf.RoundToInt(p1.y * mapScale);
+                    DrawLine(x0, y0, x1, y1, _trailColor);
+                }
+            }
+
+            // 4. Camera Servo Gimbal Beam & FOV Cone (90 = straight up +Y)
             float servoOffset = _lastServoDeg - 90f;
             float centerCamAngle = 90f - servoOffset;
-            float leftRay = (centerCamAngle + 28f) * Mathf.Deg2Rad;
-            float rightRay = (centerCamAngle - 28f) * Mathf.Deg2Rad;
-            DrawLine(cx, cy, cx + (int)(Mathf.Cos(leftRay) * maxRadius * 0.85f), cy + (int)(Mathf.Sin(leftRay) * maxRadius * 0.85f), _fovColor);
-            DrawLine(cx, cy, cx + (int)(Mathf.Cos(rightRay) * maxRadius * 0.85f), cy + (int)(Mathf.Sin(rightRay) * maxRadius * 0.85f), _fovColor);
+            float centerRad = centerCamAngle * Mathf.Deg2Rad;
+            float leftRay = (centerCamAngle + 24f) * Mathf.Deg2Rad;
+            float rightRay = (centerCamAngle - 24f) * Mathf.Deg2Rad;
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(centerRad) * maxRadius * 0.85f), cy + (int)(Mathf.Sin(centerRad) * maxRadius * 0.85f), _fovColor);
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(leftRay) * maxRadius * 0.75f), cy + (int)(Mathf.Sin(leftRay) * maxRadius * 0.75f), _fovColor);
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(rightRay) * maxRadius * 0.75f), cy + (int)(Mathf.Sin(rightRay) * maxRadius * 0.75f), _fovColor);
 
-            // 4. Rotating Radar Sweep Beam
+            // 5. Rotating Radar Sweep Beam
             float sweepRad = _currentSweepAngle * Mathf.Deg2Rad;
             int sweepX = cx + (int)(Mathf.Cos(sweepRad) * maxRadius);
             int sweepY = cy + (int)(Mathf.Sin(sweepRad) * maxRadius);
             DrawLine(cx, cy, sweepX, sweepY, _sweepColor);
 
-            // 5. Ultrasonic Obstacle Blip
-            if (_lastUltrasonicCm > 2f && _lastUltrasonicCm < (maxRangeMeters * 100f))
+            // 6. Ultrasonic Obstacle Blip
+            if (_lastUltrasonicCm > 1f && _lastUltrasonicCm < (maxRangeMeters * 100f))
             {
                 float distRatio = Mathf.Clamp01((_lastUltrasonicCm / 100f) / maxRangeMeters);
                 int rDist = (int)(distRatio * maxRadius);
-                float obsAngle = centerCamAngle * Mathf.Deg2Rad;
 
-                int ox = cx + (int)(Mathf.Cos(obsAngle) * rDist);
-                int oy = cy + (int)(Mathf.Sin(obsAngle) * rDist);
+                int ox = cx + (int)(Mathf.Cos(centerRad) * rDist);
+                int oy = cy + (int)(Mathf.Sin(centerRad) * rDist);
 
-                Color32 obsCol = (_lastUltrasonicCm < 25f) ? _alertObstacleColor :
-                                 (_lastUltrasonicCm < 60f) ? _cautionObstacleColor : _safeObstacleColor;
+                Color32 obsCol = (_lastUltrasonicCm < 20f) ? _alertObstacleColor :
+                                 (_lastUltrasonicCm < 55f) ? _cautionObstacleColor : _safeObstacleColor;
 
                 DrawSolidCircle(ox, oy, 5, obsCol);
             }
 
-            // 6. Swarm Peer Markers
+            // 7. Swarm Peer Markers
             var cfg = VResqFrameworkConfig.Instance;
             if (cfg != null && cfg.Profile.fleetNodes != null)
             {
@@ -173,13 +212,14 @@ namespace VResQ.Core
                     float peerAngle = (45f + i * 95f) * Mathf.Deg2Rad;
                     int px = cx + (int)(Mathf.Cos(peerAngle) * (maxRadius * 0.65f));
                     int py = cy + (int)(Mathf.Sin(peerAngle) * (maxRadius * 0.65f));
-                    DrawSolidCircle(px, py, 4, _peerOnlineColor);
+                    DrawSolidCircle(px, py, 5, _peerOnlineColor);
                 }
             }
 
-            // 7. Robot Center Marker
+            // 8. Robot Center Marker & Heading Arrow
             DrawSolidCircle(cx, cy, 4, _robotColor);
-            DrawLine(cx, cy, cx, cy + 14, _robotColor);
+            float hdgRad = (90f - _lastHeadingDeg) * Mathf.Deg2Rad;
+            DrawLine(cx, cy, cx + (int)(Mathf.Cos(hdgRad) * 16f), cy + (int)(Mathf.Sin(hdgRad) * 16f), _robotColor);
 
             _radarTexture.SetPixels32(_renderBuffer);
             _radarTexture.Apply();

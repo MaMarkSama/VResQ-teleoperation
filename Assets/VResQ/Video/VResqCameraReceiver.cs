@@ -1,6 +1,6 @@
 using System;
 using System.IO;
-using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -10,14 +10,13 @@ using VResQ.Core;
 namespace VResQ.Video
 {
     /// <summary>
-    /// High-performance MJPEG Camera Stream Receiver for V-ResQ 360°/180° Surround Display.
-    /// Reads /video_feed from the active robot node and updates a Texture2D at 20-30 FPS.
-    /// Automatically switches stream when VResqClient switches robots.
+    /// High-performance MJPEG Camera Stream Receiver for V-ResQ Surround Cockpit.
+    /// Uses HttpClient ResponseHeadersRead for zero-buffering 25-30 FPS MJPEG streaming from /video_feed.
+    /// Automatically tracks VResqClient's active online robot IP (10.66.68.82, 10.66.68.10, 10.66.68.52).
     /// </summary>
     public class VResqCameraReceiver : MonoBehaviour
     {
         [Header("Stream Target")]
-        [Tooltip("Direct MJPEG Stream URL. If blank, auto-derived from VResqClient settings.")]
         public string streamUrl = "";
 
         [Header("Optional Target Displays")]
@@ -40,23 +39,34 @@ namespace VResQ.Video
         public float StreamFps => currentFps;
 
         [SerializeField] private int framesReceived = 0;
+        public int FramesReceived => framesReceived;
 
         private Texture2D _videoTexture;
         public Texture2D VideoTexture => _videoTexture;
+
+        private static readonly HttpClient _streamHttpClient = new HttpClient
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
 
         private CancellationTokenSource _cts;
         private byte[] _latestFrameBytes;
         private readonly object _frameLock = new object();
         private bool _hasNewFrame = false;
 
+        private string _activeStreamIp = "";
+        private int _activeStreamPort = 8000;
         private int _fpsCounter = 0;
         private float _fpsTimer = 0f;
 
+        private void Awake()
+        {
+            EnsureTextureCreated();
+        }
+
         private void Start()
         {
-            _videoTexture = new Texture2D(streamWidth, streamHeight, TextureFormat.RGB24, false);
-            _videoTexture.wrapMode = TextureWrapMode.Repeat;
-            GeneratePanoramicStandbyPattern(_videoTexture);
+            EnsureTextureCreated();
             ApplyTextureToTargets(_videoTexture);
 
             if (VResqClient.Instance != null)
@@ -64,13 +74,20 @@ namespace VResQ.Video
                 VResqClient.Instance.OnRobotSwitched.AddListener(OnRobotSwitched);
             }
 
-            UpdateStreamUrl();
-            StartStream();
+            SyncTargetIpAndStart();
         }
 
-        /// <summary>
-        /// Generates a sleek 360° panoramic tactical grid & horizon standby texture before live camera frames arrive.
-        /// </summary>
+        private void EnsureTextureCreated()
+        {
+            if (_videoTexture == null)
+            {
+                _videoTexture = new Texture2D(streamWidth, streamHeight, TextureFormat.RGB24, false);
+                _videoTexture.wrapMode = TextureWrapMode.Clamp;
+                _videoTexture.filterMode = FilterMode.Bilinear;
+                GeneratePanoramicStandbyPattern(_videoTexture);
+            }
+        }
+
         private void GeneratePanoramicStandbyPattern(Texture2D tex)
         {
             int w = tex.width;
@@ -110,22 +127,37 @@ namespace VResQ.Video
 
         private void OnRobotSwitched(string newIp)
         {
-            Debug.Log($"<color=cyan>[CameraReceiver]</color> Switching surround camera stream to {newIp}...");
-            hasReceivedLiveFrame = false;
-            StopStream();
-            UpdateStreamUrl();
-            StartStream();
+            SyncTargetIpAndStart();
         }
 
-        private void UpdateStreamUrl()
+        private void SyncTargetIpAndStart()
         {
-            string ip = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "10.66.68.52";
+            string ip = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "10.66.68.82";
             int port = VResqClient.Instance != null ? VResqClient.Instance.port : 8000;
-            streamUrl = $"http://{ip}:{port}/video_feed";
+
+            if (_activeStreamIp == ip && _activeStreamPort == port && isStreaming) return;
+
+            _activeStreamIp = ip;
+            _activeStreamPort = port;
+            streamUrl = $"http://{_activeStreamIp}:{_activeStreamPort}/video_feed";
+            Debug.Log($"<color=cyan>[CameraReceiver]</color> Connecting live MJPEG stream: {streamUrl}");
+
+            StartStream();
         }
 
         private void Update()
         {
+            EnsureTextureCreated();
+
+            // Always stay locked onto VResqClient's current robotIp
+            if (VResqClient.Instance != null && !string.IsNullOrEmpty(VResqClient.Instance.robotIp))
+            {
+                if (_activeStreamIp != VResqClient.Instance.robotIp || !isStreaming)
+                {
+                    SyncTargetIpAndStart();
+                }
+            }
+
             if (targetRawImage != null && targetRawImage.texture != _videoTexture)
             {
                 targetRawImage.texture = _videoTexture;
@@ -151,10 +183,12 @@ namespace VResQ.Video
 
             if (frameToLoad != null)
             {
-                _videoTexture.LoadImage(frameToLoad);
-                hasReceivedLiveFrame = true;
-                _fpsCounter++;
-                framesReceived++;
+                if (_videoTexture.LoadImage(frameToLoad))
+                {
+                    hasReceivedLiveFrame = true;
+                    _fpsCounter++;
+                    framesReceived++;
+                }
             }
         }
 
@@ -176,7 +210,8 @@ namespace VResQ.Video
             StopStream();
             _cts = new CancellationTokenSource();
             isStreaming = true;
-            Task.Run(() => StreamLoopAsync(_cts.Token));
+            string url = streamUrl;
+            Task.Run(() => StreamLoopAsync(url, _cts.Token));
         }
 
         public void StopStream()
@@ -186,47 +221,69 @@ namespace VResQ.Video
             _cts = null;
         }
 
-        private async Task StreamLoopAsync(CancellationToken token)
+        private async Task StreamLoopAsync(string url, CancellationToken token)
         {
+            byte[] readBuffer = new byte[65536];
+            byte[] workBuffer = new byte[524288];
+            int workLen = 0;
+
             while (!token.IsCancellationRequested)
             {
-                HttpWebRequest request = null;
-                HttpWebResponse response = null;
-                Stream stream = null;
-
                 try
                 {
-                    UpdateStreamUrl();
-                    request = (HttpWebRequest)WebRequest.Create(streamUrl);
-                    request.Timeout = 3500;
-                    request.ReadWriteTimeout = 4500;
-
-                    using (token.Register(() => request.Abort()))
+                    if (string.IsNullOrEmpty(url))
                     {
-                        response = (HttpWebResponse)await request.GetResponseAsync();
+                        await Task.Delay(500, token);
+                        continue;
                     }
 
-                    stream = response.GetResponseStream();
-                    byte[] buffer = new byte[65536];
-                    using (var ms = new MemoryStream())
+                    using (var reqCts = new CancellationTokenSource(TimeSpan.FromSeconds(4)))
+                    using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, reqCts.Token))
+                    using (var response = await _streamHttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, linked.Token))
                     {
-                        while (!token.IsCancellationRequested)
+                        response.EnsureSuccessStatusCode();
+                        using (var stream = await response.Content.ReadAsStreamAsync())
                         {
-                            int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, token);
-                            if (bytesRead <= 0) break;
-
-                            ms.Write(buffer, 0, bytesRead);
-                            byte[] data = ms.ToArray();
-
-                            int soi = FindBytes(data, new byte[] { 0xFF, 0xD8 }, 0);
-                            if (soi >= 0)
+                            workLen = 0;
+                            while (!token.IsCancellationRequested)
                             {
-                                int eoi = FindBytes(data, new byte[] { 0xFF, 0xD9 }, soi + 2);
-                                if (eoi >= 0)
+                                int bytesRead = await stream.ReadAsync(readBuffer, 0, readBuffer.Length, token);
+                                if (bytesRead <= 0) break;
+
+                                if (workLen + bytesRead > workBuffer.Length)
                                 {
-                                    int jpegLength = (eoi + 2) - soi;
-                                    byte[] jpegBytes = new byte[jpegLength];
-                                    Buffer.BlockCopy(data, soi, jpegBytes, 0, jpegLength);
+                                    workLen = 0; // Reset on overflow
+                                }
+
+                                Buffer.BlockCopy(readBuffer, 0, workBuffer, workLen, bytesRead);
+                                workLen += bytesRead;
+
+                                // Extract all complete JPEG frames (SOI 0xFF 0xD8 .. EOI 0xFF 0xD9)
+                                while (true)
+                                {
+                                    int soi = FindMarker(workBuffer, workLen, 0xFF, 0xD8, 0);
+                                    if (soi < 0)
+                                    {
+                                        workLen = 0;
+                                        break;
+                                    }
+
+                                    int eoi = FindMarker(workBuffer, workLen, 0xFF, 0xD9, soi + 2);
+                                    if (eoi < 0)
+                                    {
+                                        // Shift SOI to start of workBuffer if needed
+                                        if (soi > 0)
+                                        {
+                                            int rem = workLen - soi;
+                                            Buffer.BlockCopy(workBuffer, soi, workBuffer, 0, rem);
+                                            workLen = rem;
+                                        }
+                                        break;
+                                    }
+
+                                    int jpegLen = (eoi + 2) - soi;
+                                    byte[] jpegBytes = new byte[jpegLen];
+                                    Buffer.BlockCopy(workBuffer, soi, jpegBytes, 0, jpegLen);
 
                                     lock (_frameLock)
                                     {
@@ -234,56 +291,40 @@ namespace VResQ.Video
                                         _hasNewFrame = true;
                                     }
 
-                                    int remaining = data.Length - (eoi + 2);
-                                    ms.SetLength(0);
-                                    if (remaining > 0)
+                                    int leftover = workLen - (eoi + 2);
+                                    if (leftover > 0)
                                     {
-                                        ms.Write(data, eoi + 2, remaining);
+                                        Buffer.BlockCopy(workBuffer, eoi + 2, workBuffer, 0, leftover);
                                     }
+                                    workLen = leftover;
                                 }
-                            }
-
-                            if (ms.Length > 2000000)
-                            {
-                                ms.SetLength(0);
                             }
                         }
                     }
                 }
                 catch (OperationCanceledException)
                 {
-                    break;
+                    if (token.IsCancellationRequested) break;
                 }
                 catch (Exception)
                 {
-                    await Task.Delay(1800, token);
-                }
-                finally
-                {
-                    try { stream?.Dispose(); } catch { }
-                    try { response?.Dispose(); } catch { }
+                    // Retry after brief delay
                 }
 
                 if (token.IsCancellationRequested) break;
-                await Task.Delay(1000, token);
+                await Task.Delay(1200, token);
             }
         }
 
-        private static int FindBytes(byte[] source, byte[] pattern, int startIndex)
+        private static int FindMarker(byte[] buffer, int length, byte b0, byte b1, int startIndex)
         {
-            if (source == null || pattern == null || source.Length < pattern.Length) return -1;
-            for (int i = startIndex; i <= source.Length - pattern.Length; i++)
+            int limit = length - 1;
+            for (int i = startIndex; i < limit; i++)
             {
-                bool match = true;
-                for (int j = 0; j < pattern.Length; j++)
+                if (buffer[i] == b0 && buffer[i + 1] == b1)
                 {
-                    if (source[i + j] != pattern[j])
-                    {
-                        match = false;
-                        break;
-                    }
+                    return i;
                 }
-                if (match) return i;
             }
             return -1;
         }
@@ -294,9 +335,9 @@ namespace VResQ.Video
             {
                 targetRawImage.texture = tex;
             }
-            if (targetRenderer != null && targetRenderer.material != null)
+            if (targetRenderer != null && targetRenderer.sharedMaterial != null)
             {
-                targetRenderer.material.mainTexture = tex;
+                targetRenderer.sharedMaterial.mainTexture = tex;
             }
         }
     }

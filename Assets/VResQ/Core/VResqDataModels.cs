@@ -5,9 +5,28 @@ using UnityEngine;
 
 namespace VResQ.Core
 {
+    [Serializable]
+    public class TelemetryAlerts
+    {
+        public bool impact;
+        public bool rollover;
+        public bool overheat;
+        public bool obstacle;
+        public bool vibration;
+    }
+
+    [Serializable]
+    public class SensorStatusFlags
+    {
+        public bool ultrasonic;
+        public bool bme280;
+        public bool mpu6050;
+        public bool oled;
+    }
+
     /// <summary>
-    /// Telemetry metrics received from ESP32 & Sensors (MPU6050, BME280, Ultrasonic)
-    /// Non-nullable types are used for reliable Unity JsonUtility deserialization.
+    /// Telemetry metrics received from ESP32 & Sensors (MPU6050, BME280, Ultrasonic, OLED)
+    /// Matches the exact JSON structure of the V-ResQ Web Dashboard (/api/state & /ws).
     /// </summary>
     [Serializable]
     public class TelemetryData
@@ -23,11 +42,13 @@ namespace VResQ.Core
         public float terrain_roughness;
         public float heat_index_c;
         public int alert_flags;
+        public TelemetryAlerts alerts = new TelemetryAlerts();
         public int fsm_state;
         public int servo_deg = 90;
         public int flags;
         public int sensor_flags;
         public int oled_page;
+        public SensorStatusFlags sensors = new SensorStatusFlags();
         public int rx_ok;
         public int crc_errors;
         public int esp32_cmd_rx_ok;
@@ -35,6 +56,7 @@ namespace VResQ.Core
         public int esp32_last_cmd_age_ms;
         public int motor_status;
         public bool motor_driver_ok;
+        public string motor_driver = "legacy";
         public int motor_left_cmd;
         public int motor_right_cmd;
     }
@@ -51,17 +73,27 @@ namespace VResQ.Core
     [Serializable]
     public class SurvivabilityData
     {
-        public int score;
-        public string level;
-        public string label;
+        public int score = 100;
+        public string category = "NOMINAL";
+        public string level = "SAFE";
+        public string label = "NORMAL";
+    }
+
+    [Serializable]
+    public class TractionAnalyticsData
+    {
+        public string status = "TRACTION_NOMINAL";
+        public string label_th = "สภาพพื้นผิวปกติ";
+        public string color = "ok";
     }
 
     [Serializable]
     public class AnalyticsData
     {
         public string floor_name;
-        public AirQualityData air;
-        public SurvivabilityData survivability;
+        public AirQualityData air = new AirQualityData();
+        public SurvivabilityData survivability = new SurvivabilityData();
+        public TractionAnalyticsData traction = new TractionAnalyticsData();
         public string fire_risk;
         public string collapse_risk;
     }
@@ -92,17 +124,21 @@ namespace VResQ.Core
     public class NodeIdentityData
     {
         public string node_uid;
+        public string uid;
         public int robot_id = 1;
         public int cluster_id = 0;
         public string node_name = "vresq-node";
+        public string name = "vresq-node";
         public string role = "t2-dashboard";
         public string protocol_version = "node-zero";
+        public string source;
     }
 
     [Serializable]
     public class DiscoveredPeerData
     {
         public string name;
+        public string server;
         public string[] ips;
         public int port = 8000;
         public NodeIdentityData properties;
@@ -119,30 +155,36 @@ namespace VResQ.Core
     }
 
     /// <summary>
-    /// Master Robot State snapshot received via WebSocket at 20Hz
+    /// Master Robot State snapshot received via WebSocket (/ws) at 20Hz or HTTP (/api/state).
     /// </summary>
     [Serializable]
     public class RobotStateSnapshot
     {
-        public NodeIdentityData identity;
+        public NodeIdentityData identity = new NodeIdentityData();
         public NodeIdentityData node_info;
         public TelemetryData telemetry = new TelemetryData();
-        public AnalyticsData analytics;
+        public AnalyticsData analytics = new AnalyticsData();
         public AIDetection[] ai_detections;
         public AIConfigData ai_config = new AIConfigData();
         public int servo_deg = 90;
         public int left_pwm;
         public int right_pwm;
-        public float speed_scale = 0.7f;
+        public float speed_scale = 0.75f;
+        public int oled_page = 0;
+        public int oled_fx = 0;
+        public bool oled_auto = false;
         public bool estop;
         public bool buzzer;
         public bool serial_connected;
         public string serial_port;
+        public float last_command_age_ms;
+        public float last_telem_age_ms;
         public string active_action;
         public int mode = 1;
         public float pose_x;
         public float pose_y;
         public float pose_heading;
+        public bool radar_active;
 
         [NonSerialized]
         public Dictionary<int, float> radarPoints = new Dictionary<int, float>();
@@ -175,6 +217,16 @@ namespace VResQ.Core
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Wrapper envelope for WebSocket {"type": "state", "data": { ... }} messages.
+    /// </summary>
+    [Serializable]
+    public class WsStateEnvelope
+    {
+        public string type;
+        public RobotStateSnapshot data;
     }
 
     [Serializable]

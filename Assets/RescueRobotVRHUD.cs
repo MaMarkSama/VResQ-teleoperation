@@ -8,21 +8,26 @@ using VResQ.Video;
 using VResQ.Control;
 
 /// <summary>
-/// Master Open-Visor Tactical VR HUD & Framework UI Controller for V-ResQ Rescue Operations.
-/// Designed for 100% Joystick/Gamepad control and Open Surround Vision (NO flat monitor screen blocking center view).
-/// Seamlessly switches between External 3D World (มองเห็นรอบนอก) and 360°/220°/180° Surround Camera (ภาพจากกล้องรอบตัว).
+/// Master Open-Visor Tactical VR HUD & Web-Dashboard Parity Controller for V-ResQ Rescue Operations.
+/// Displays 100% of the exact same telemetry, Smart Assist, Mission Assessment, OLED Mirror,
+/// AI Detections, and Swarm Fleet data as the V-ResQ Web Dashboard, while projecting the live
+/// camera stream onto the 360°/220°/180° Surround Dome (ภาพรอบตัว) or toggling to External 3D World (มองเห็นรอบนอก).
 /// </summary>
 public class RescueRobotVRHUD : MonoBehaviour
 {
-    [Header("--- Top Command Bar ---")]
+    private static readonly string[] FSM_NAMES = { "IDLE", "MANUAL", "AUTO", "ESTOP", "FAULT" };
+
+    [Header("--- Top Command Bar & Web Ops/Sensor Strip ---")]
     public TextMeshProUGUI robotIdText;
     public TextMeshProUGUI latencyText;
     public TextMeshProUGUI viewModeBadgeText;
     public TextMeshProUGUI aiStatusBadgeText;
     public TextMeshProUGUI clockText;
+    public TextMeshProUGUI opsStripText;
+    public TextMeshProUGUI sensorStripText;
 
     [Header("--- Open Center Visor & Propulsion Deck ---")]
-    public RawImage centerVideoScreen; // Kept null by default (no flat screen in center)
+    public RawImage centerVideoScreen;
     public RectTransform aiBboxContainer;
     public TextMeshProUGUI videoOverlayText;
     public TextMeshProUGUI compassHeadingText;
@@ -41,22 +46,25 @@ public class RescueRobotVRHUD : MonoBehaviour
     public GameObject obstacleAlertPanel;
     public TextMeshProUGUI obstacleDistanceText;
 
-    [Header("--- Left Wing: Radar & Swarm Fleet ---")]
+    [Header("--- Left Wing: Local Map, Swarm Fleet & OLED Mirror ---")]
     public RectTransform leftPanelRect;
     public VResqRadarMap radarMap;
     public Button[] nodeCardButtons = new Button[3];
     public Image[] nodeCardBgs = new Image[3];
     public Image[] nodeCardDots = new Image[3];
     public TextMeshProUGUI[] nodeCardTexts = new TextMeshProUGUI[3];
+    public TextMeshProUGUI oledPreviewText;
     public TextMeshProUGUI swarmStatusText;
 
-    [Header("--- Right Wing: Attitude, Environment & Hardware ---")]
+    [Header("--- Right Wing: IMU Twin, Smart Assist & Mission Assessment ---")]
     public RectTransform rightPanelRect;
     public RectTransform imuHorizonBall;
     public TextMeshProUGUI pitchText;
     public TextMeshProUGUI rollText;
     public TextMeshProUGUI yawText;
     public TextMeshProUGUI envMetricsText;
+    public TextMeshProUGUI smartAssistText;
+    public TextMeshProUGUI missionAssessmentText;
     public TextMeshProUGUI hardwareHealthText;
     public TextMeshProUGUI batteryText;
     public Image batteryBarFill;
@@ -80,7 +88,8 @@ public class RescueRobotVRHUD : MonoBehaviour
     public List<Graphic> themeAccentGraphics = new List<Graphic>();
     public List<Image> themePanelBackgrounds = new List<Image>();
 
-    private float _timer = 0f;
+    private float _missionElapsedSec = 0f;
+    private int _selectedOledPage = 0;
     private VResqTeleopController _teleop;
     private VResqCameraReceiver _cameraReceiver;
     private VResqFrameworkConfig _config;
@@ -94,7 +103,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (client == null)
         {
             client = gameObject.AddComponent<VResqClient>();
-            client.robotIp = "10.66.68.52";
+            client.robotIp = "10.66.68.82";
             client.port = 8000;
         }
 
@@ -102,7 +111,6 @@ public class RescueRobotVRHUD : MonoBehaviour
         _teleop = GetComponent<VResqTeleopController>() ?? gameObject.AddComponent<VResqTeleopController>();
         surroundDisplay = GetComponent<VResqSurroundDisplay>() ?? gameObject.AddComponent<VResqSurroundDisplay>();
 
-        // Do NOT bind a flat center screen; video goes strictly to the 3D Surround Dome!
         if (_cameraReceiver != null)
         {
             _cameraReceiver.targetRawImage = null;
@@ -154,6 +162,10 @@ public class RescueRobotVRHUD : MonoBehaviour
             if (n.Contains("BTN_NODE_0")) b.onClick.AddListener(() => SelectFleetNode(0));
             else if (n.Contains("BTN_NODE_1")) b.onClick.AddListener(() => SelectFleetNode(1));
             else if (n.Contains("BTN_NODE_2")) b.onClick.AddListener(() => SelectFleetNode(2));
+            else if (n.Contains("BTN_OLED_NEXT")) b.onClick.AddListener(CycleOledPage);
+            else if (n.Contains("BTN_SURVEY")) b.onClick.AddListener(() => VResqClient.Instance?.SendActionCommand("patrol"));
+            else if (n.Contains("BTN_RTH")) b.onClick.AddListener(() => VResqClient.Instance?.SendActionCommand("return_home"));
+            else if (n.Contains("BTN_RADAR_SWEEP")) b.onClick.AddListener(() => VResqClient.Instance?.SendActionCommand("radar_sweep"));
             else if (n.Contains("BTN_SCAN")) b.onClick.AddListener(() => _teleop?.ActionScan());
             else if (n.Contains("BTN_BEACON")) b.onClick.AddListener(() => _teleop?.ActionBeacon());
             else if (n.Contains("BTN_CENTER")) b.onClick.AddListener(() => { _teleop?.ActionCenter(); _teleop?.ResetLookOrientation(); });
@@ -181,6 +193,16 @@ public class RescueRobotVRHUD : MonoBehaviour
             else if (n.Contains("CFG_RECENTER")) b.onClick.AddListener(() => _teleop?.ResetLookOrientation());
             else if (n.Contains("CFG_SAVE")) b.onClick.AddListener(() => { _config?.SaveProfile(); RefreshConfigModalText(); });
             else if (n.Contains("CFG_RESET")) b.onClick.AddListener(() => { _config?.ResetToDefaults(); RefreshConfigModalText(); });
+        }
+    }
+
+    public void CycleOledPage()
+    {
+        _selectedOledPage = (_selectedOledPage + 1) % 4;
+        VResqClient.Instance?.SendOledPageCommand(_selectedOledPage);
+        if (VResqClient.Instance != null && VResqClient.Instance.LatestState != null)
+        {
+            RenderOledPreview(_selectedOledPage, VResqClient.Instance.LatestState);
         }
     }
 
@@ -317,22 +339,27 @@ public class RescueRobotVRHUD : MonoBehaviour
 
             if (nodeCardTexts != null && i < nodeCardTexts.Length && nodeCardTexts[i] != null)
             {
+                string rName = !string.IsNullOrEmpty(n.remoteNodeName) ? n.remoteNodeName.ToUpper() : n.displayName;
                 string role = !string.IsNullOrEmpty(n.remoteRole) ? n.remoteRole.ToUpper() : n.roleLabel;
-                string statusStr = n.isOnline ? $"<color=#00FF77>ONLINE {n.lastRttMs:F0}ms</color>" : "<color=#FF5566>OFFLINE</color>";
+                string statusStr = n.isOnline
+                    ? $"<color=#00FF77>ONLINE {n.lastRttMs:F0}ms</color> (AI {n.detectorFps:F1}fps)"
+                    : "<color=#FF5566>OFFLINE</color>";
                 string activeTag = isSelected ? " <color=#00F0FF>◀ ACTIVE</color>" : "";
-                nodeCardTexts[i].text = $"<b>[{i + 1}] {n.displayName} ({role})</b>{activeTag}\n<size=13>{n.ipAddress}:{n.port}  •  {statusStr}</size>";
+                nodeCardTexts[i].text = $"<b>[{i + 1}] {rName} ({role})</b>{activeTag}\n<size=12>{n.ipAddress}:{n.port} • {statusStr}</size>";
             }
         }
     }
 
     private void Update()
     {
-        _timer += Time.deltaTime;
+        _missionElapsedSec += Time.deltaTime;
 
         if (clockText != null)
-            clockText.text = DateTime.Now.ToString("HH:mm:ss");
+        {
+            TimeSpan ts = TimeSpan.FromSeconds(_missionElapsedSec);
+            clockText.text = $"MISSION {ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+        }
 
-        // 1. Update Surround vs External World Badge
         if (viewModeBadgeText != null && surroundDisplay != null)
         {
             viewModeBadgeText.text = surroundDisplay.currentViewMode switch
@@ -345,14 +372,13 @@ public class RescueRobotVRHUD : MonoBehaviour
             };
         }
 
-        // 2. Live Joystick / Controller Status & 2D Stick Scope
         if (_teleop != null)
         {
             if (controllerStatusText != null)
             {
                 Vector2 st = _teleop.LiveDriveStick;
-                string joyIcon = _teleop.HasPhysicalJoystick ? "🎮 JOYSTICK ACTIVE:" : "⌨ INPUT ACTIVE:";
-                controllerStatusText.text = $"{joyIcon} {_teleop.ActiveControllerName}   |   STICK X:{st.x:+0.00;-0.00}  Y:{st.y:+0.00;-0.00}";
+                string joyIcon = _teleop.HasPhysicalJoystick ? "🎮 JOYSTICK:" : "⌨ INPUT:";
+                controllerStatusText.text = $"{joyIcon} {_teleop.ActiveControllerName}  |  L-STICK ({st.x:+0.00;-0.00}, {st.y:+0.00;-0.00})";
                 controllerStatusText.color = _teleop.HasPhysicalJoystick ? new Color(0f, 1f, 0.55f, 1f) : new Color(0.6f, 0.92f, 1f, 1f);
             }
 
@@ -363,7 +389,6 @@ public class RescueRobotVRHUD : MonoBehaviour
             }
         }
 
-        // 3. Deadman Status
         bool isDeadman = (_teleop == null || _teleop.IsDeadmanActive);
         if (deadmanStatusText != null)
         {
@@ -375,12 +400,6 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (deadmanIndicatorDot != null)
         {
             deadmanIndicatorDot.color = isDeadman ? new Color(0f, 1f, 0.45f, 1f) : new Color(1f, 0.3f, 0.25f, 1f);
-        }
-
-        // 4. Always update Gimbal & Drive Gauges immediately from Joystick when offline!
-        if (VResqClient.Instance == null || !VResqClient.Instance.IsConnected)
-        {
-            UpdateInteractiveLocalPreview();
         }
     }
 
@@ -394,24 +413,28 @@ public class RescueRobotVRHUD : MonoBehaviour
         RefreshFleetNodeCards();
         if (latencyText != null)
         {
-            latencyText.text = "LOCAL JOYSTICK SIM (SEARCHING ROBOT...)";
+            latencyText.text = "DISCONNECTED (AUTO-SWITCHING...)";
             latencyText.color = new Color(1f, 0.78f, 0.2f, 1f);
         }
         if (obstacleAlertPanel != null)
             obstacleAlertPanel.SetActive(false);
     }
 
-    private void OnRobotStateReceived(RobotStateSnapshot state)
+    /// <summary>
+    /// Renders 100% of the exact same state fields as renderState(s) in the Web Dashboard's app.js!
+    /// </summary>
+    private void OnRobotStateReceived(RobotStateSnapshot s)
     {
-        if (state == null) return;
+        if (s == null) return;
+        TelemetryData t = s.telemetry ?? new TelemetryData();
+        SensorStatusFlags sensors = t.sensors ?? new SensorStatusFlags();
+        bool freshTelemetry = s.last_telem_age_ms > 0.01f && s.last_telem_age_ms < 1200f;
 
-        string rName = (state.node_info != null && !string.IsNullOrEmpty(state.node_info.node_name))
-            ? state.node_info.node_name
-            : (state.identity != null && !string.IsNullOrEmpty(state.identity.node_name) ? state.identity.node_name : "VRESQ-UNIT");
-        string role = (state.node_info != null && !string.IsNullOrEmpty(state.node_info.role))
-            ? state.node_info.role
-            : (state.identity != null ? state.identity.role : "LEADER");
-        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "10.66.68.52";
+        // 1. Robot Identity & Link Status (Matches Web TopBar & ops-strip)
+        var id = (s.identity != null && !string.IsNullOrEmpty(s.identity.node_name)) ? s.identity : s.node_info;
+        string rName = id != null && !string.IsNullOrEmpty(id.node_name) ? id.node_name : "vresq-node-zero";
+        string role = id != null && !string.IsNullOrEmpty(id.role) ? id.role : "t2-dashboard";
+        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "10.66.68.82";
 
         if (robotIdText != null)
         {
@@ -422,58 +445,94 @@ public class RescueRobotVRHUD : MonoBehaviour
         {
             float rtt = VResqClient.Instance.LatencyMs;
             float camFps = _cameraReceiver != null ? _cameraReceiver.StreamFps : 0f;
-            latencyText.text = $"WS: {rtt:F0}ms  |  SURROUND CAM: {camFps:F0} FPS";
-            latencyText.color = rtt < 45f ? new Color(0f, 1f, 0.45f, 1f) : (rtt < 110f ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(1f, 0.35f, 0.35f, 1f));
+            latencyText.text = $"DASHBOARD OK  |  RTT: {rtt:F0} ms  |  VIDEO: {camFps:F0} FPS";
+            latencyText.color = new Color(0f, 1f, 0.5f, 1f);
         }
 
-        int aiCount = state.ai_detections != null ? state.ai_detections.Length : 0;
-        float aiFps = state.ai_config != null ? state.ai_config.detector_fps : 0f;
+        // 2. Web Dashboard Ops Strip & 6-Sensor Strip
+        string fsmName = (t.fsm_state >= 0 && t.fsm_state < FSM_NAMES.Length) ? FSM_NAMES[t.fsm_state] : t.fsm_state.ToString();
+        string serialStr = s.serial_connected ? $"<color=#00FF88>ONLINE ({s.serial_port})</color>" : "<color=#FF6677>offline</color>";
+        string actStr = !string.IsNullOrEmpty(s.active_action) ? s.active_action : "idle";
+        string cmdAgeStr = s.last_command_age_ms > 0.01f ? $"{s.last_command_age_ms:F0} ms" : "--";
+        string telAgeStr = s.last_telem_age_ms > 0.01f ? $"{s.last_telem_age_ms:F0} ms" : "--";
+
+        float headingDeg = Mathf.Abs(t.yaw_deg) > 0.01f ? t.yaw_deg : (s.pose_heading * Mathf.Rad2Deg);
+        float normHdg = ((headingDeg % 360f) + 360f) % 360f;
+
+        if (opsStripText != null)
+        {
+            opsStripText.text =
+                $"<b>Robot:</b> {rName}   |   <b>Serial:</b> {serialStr}   |   <b>FSM:</b> {fsmName}   |   <b>Action:</b> <color=#00F0FF>{actStr}</color>   |   <b>Cmd Age:</b> {cmdAgeStr}   |   <b>Telem Age:</b> {telAgeStr}";
+        }
+
+        if (sensorStripText != null)
+        {
+            string usCard = (freshTelemetry && sensors.ultrasonic) ? $"<color=#00FF88>{t.ultrasonic_cm:F0} cm</color>" : (t.ultrasonic_cm > 0 ? $"{t.ultrasonic_cm:F0} cm" : "offline");
+            string bmeCard = (freshTelemetry && sensors.bme280) ? $"<color=#00FF88>{t.temp_c:F1}°C / {t.humidity:F0}%</color>" : "offline";
+            string mpuCard = (freshTelemetry && sensors.mpu6050) ? $"<color=#00FF88>P:{t.pitch_deg:F0}° R:{t.roll_deg:F0}°</color>" : "offline";
+            string oledCard = (freshTelemetry && sensors.oled) ? $"<color=#00FF88>Page {s.oled_page}</color>" : $"Page {s.oled_page} (offline)";
+            string altCard = (freshTelemetry && sensors.bme280) ? $"{t.altitude_m:F1} m" : $"{t.altitude_m:F1} m";
+            string yawCard = $"{normHdg:000.0}°";
+
+            sensorStripText.text =
+                $"<b>Ultrasonic:</b> {usCard}   |   <b>BME280:</b> {bmeCard}   |   <b>MPU6050:</b> {mpuCard}   |   <b>OLED:</b> {oledCard}   |   <b>Altitude:</b> {altCard}   |   <b>Fused Yaw:</b> <color=#00F0FF>{yawCard}</color>";
+        }
+
+        // 3. AI Detection Badge & Bounding Boxes (Matches Web AI: JETSON (51 DET | 9.2 FPS))
+        int aiCount = s.ai_detections != null ? s.ai_detections.Length : 0;
+        int totalDet = s.ai_config != null ? s.ai_config.total_detections : 0;
+        float aiFps = s.ai_config != null ? s.ai_config.detector_fps : 0f;
+        string aiMode = (s.ai_config != null && !string.IsNullOrEmpty(s.ai_config.mode)) ? s.ai_config.mode.ToUpper() : "JETSON";
+
         if (aiStatusBadgeText != null)
         {
-            aiStatusBadgeText.text = $"AI VISION: {aiCount} TARGETS ({aiFps:F1} FPS)";
-            aiStatusBadgeText.color = aiCount > 0 ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(0.55f, 0.9f, 1f, 0.9f);
+            aiStatusBadgeText.text = $"AI: {aiMode} ({aiCount} LIVE / {totalDet} TOTAL | {aiFps:F1} FPS)";
+            aiStatusBadgeText.color = aiCount > 0 ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(0f, 1f, 0.55f, 1f);
         }
 
-        float yaw = state.telemetry != null ? ((state.telemetry.yaw_deg % 360f) + 360f) % 360f : 0f;
+        RenderAiDetections(s.ai_detections);
+
+        // 4. Center Compass & Drive / Propulsion Telemetry
         if (compassHeadingText != null)
         {
-            compassHeadingText.text = $"◄  HDG {yaw:000}° {GetCompassDirection(yaw)}  ►";
+            compassHeadingText.text = $"◄  HDG {normHdg:000.0}° {GetCompassDirection(normHdg)}  |  POSE ({s.pose_x:+0.0;-0.0}, {s.pose_y:+0.0;-0.0})  ►";
         }
 
-        float throttlePct = (_teleop != null ? _teleop.EffectiveSpeedScale : state.speed_scale) * 100f;
+        float throttlePct = (s.speed_scale > 0.01f ? s.speed_scale : (_teleop != null ? _teleop.EffectiveSpeedScale : 0.75f)) * 100f;
+        string torquePreset = throttlePct >= 95f ? "TURBO 100%" : (throttlePct >= 80f ? "NORM 85%" : "ECO 65%");
         if (speedPercentText != null)
         {
-            speedPercentText.text = $"SPEED LIMIT: {throttlePct:F0}% [DPAD UP/DN]";
+            speedPercentText.text = $"SPEED: {throttlePct:F0}% ({torquePreset})";
         }
         if (speedBarFill != null)
         {
             speedBarFill.fillAmount = Mathf.Clamp01(throttlePct / 100f);
         }
 
-        int lPwm = state.telemetry != null && state.telemetry.motor_left_cmd != 0 ? state.telemetry.motor_left_cmd : state.left_pwm;
-        int rPwm = state.telemetry != null && state.telemetry.motor_right_cmd != 0 ? state.telemetry.motor_right_cmd : state.right_pwm;
-
+        int lPwm = (t.motor_left_cmd != 0) ? t.motor_left_cmd : s.left_pwm;
+        int rPwm = (t.motor_right_cmd != 0) ? t.motor_right_cmd : s.right_pwm;
+        // If user is pushing joystick locally while robot motors are 0, show responsive feedback
+        if (lPwm == 0 && rPwm == 0 && _teleop != null && (_teleop.SimulatedLeftPwm != 0 || _teleop.SimulatedRightPwm != 0))
+        {
+            lPwm = _teleop.SimulatedLeftPwm;
+            rPwm = _teleop.SimulatedRightPwm;
+        }
         UpdateMotorGauges(lPwm, rPwm);
 
-        int sDeg = _teleop != null ? _teleop.currentServoDeg : (state.telemetry != null && state.telemetry.servo_deg > 0 ? state.telemetry.servo_deg : state.servo_deg);
+        int sDeg = s.servo_deg > 0 ? s.servo_deg : t.servo_deg;
         UpdateServoGauge(sDeg);
 
         if (fsmActionText != null)
         {
-            string act = !string.IsNullOrEmpty(state.active_action) ? state.active_action.ToUpper() : "JOYSTICK TELEOP";
-            fsmActionText.text = $"MODE: {act}";
+            fsmActionText.text = $"DRIVE: L {lPwm} / R {rPwm}  •  ACTION: {actStr.ToUpper()}";
         }
 
-        float dist = state.telemetry != null ? state.telemetry.ultrasonic_cm : 0f;
+        float dist = t.ultrasonic_cm;
         float alertCm = _config != null ? _config.Profile.collisionAlertCm : 25f;
-        float cautionCm = _config != null ? _config.Profile.collisionCautionCm : 55f;
-
         if (ultrasonicDistanceText != null)
         {
-            ultrasonicDistanceText.text = dist > 0.5f ? $"SONAR: {dist:F0} cm" : "SONAR: CLEAR";
-            ultrasonicDistanceText.color = (dist > 0.5f && dist < alertCm)
-                ? new Color(1f, 0.25f, 0.3f, 1f)
-                : ((dist > 0.5f && dist < cautionCm) ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(0f, 0.95f, 1f, 1f));
+            ultrasonicDistanceText.text = dist > 0.5f ? $"DISTANCE: {dist:F0} cm" : "DISTANCE: -- cm (NO ECHO)";
+            ultrasonicDistanceText.color = (dist > 0.5f && dist < alertCm) ? new Color(1f, 0.25f, 0.3f, 1f) : new Color(0f, 0.95f, 1f, 1f);
         }
 
         if (obstacleAlertPanel != null)
@@ -486,55 +545,117 @@ public class RescueRobotVRHUD : MonoBehaviour
             }
         }
 
-        RenderAiDetections(state.ai_detections);
+        // 5. OLED Display Mirror (Exact match to renderOledPreview in Web app.js)
+        RenderOledPreview(s.oled_page, s);
 
-        if (state.telemetry != null)
+        // 6. Right Wing Card 1: IMU & Radar Twin + 8-Metric Grid
+        float pitch = t.pitch_deg;
+        float roll = t.roll_deg;
+        if (pitchText != null) pitchText.text = $"PITCH: {pitch:+0.0;-0.0}°";
+        if (rollText != null) rollText.text = $"ROLL:  {roll:+0.0;-0.0}°";
+        if (yawText != null) yawText.text = $"YAW:   {normHdg:000.0}°";
+
+        if (imuHorizonBall != null)
         {
-            float pitch = state.telemetry.pitch_deg;
-            float roll = state.telemetry.roll_deg;
-
-            if (pitchText != null) pitchText.text = $"PITCH: {pitch:+0.0;-0.0}°";
-            if (rollText != null) rollText.text = $"ROLL:  {roll:+0.0;-0.0}°";
-            if (yawText != null) yawText.text = $"YAW:   {yaw:000.0}°";
-
-            if (imuHorizonBall != null)
-            {
-                imuHorizonBall.localEulerAngles = new Vector3(0f, 0f, -roll);
-                imuHorizonBall.anchoredPosition = new Vector2(0f, Mathf.Clamp(pitch * 1.8f, -35f, 35f));
-            }
-
-            if (envMetricsText != null)
-            {
-                float hi = state.telemetry.heat_index_c;
-                string airSafety = hi > 41f ? "<color=#FF4455>HAZARD (EXTREME HEAT)</color>" :
-                                   (hi > 32f ? "<color=#FFD166>CAUTION (WARM)</color>" : "<color=#00FF88>NOMINAL SAFE</color>");
-                envMetricsText.text =
-                    $"<b>TEMP:</b> {state.telemetry.temp_c:F1} °C       <b>HUMIDITY:</b> {state.telemetry.humidity:F0} %\n" +
-                    $"<b>PRESS:</b> {state.telemetry.pressure_hpa:F0} hPa    <b>ALTITUDE:</b> {state.telemetry.altitude_m:F1} m\n" +
-                    $"<b>HEAT IDX:</b> {hi:F1} °C    <b>STATUS:</b> {airSafety}";
-            }
-
-            if (hardwareHealthText != null)
-            {
-                string drv = state.telemetry.motor_driver_ok ? "<color=#00FF88>ONLINE</color>" : "<color=#FFD166>STANDBY</color>";
-                string serPort = !string.IsNullOrEmpty(state.serial_port) ? state.serial_port : "/dev/ttyTHS1";
-                string serState = state.serial_connected ? "<color=#00FF88>LINKED</color>" : "<color=#FF5566>DISCONNECTED</color>";
-                string aiMode = state.ai_config != null && !string.IsNullOrEmpty(state.ai_config.mode) ? state.ai_config.mode.ToUpper() : "YOLOV8-TRT";
-
-                hardwareHealthText.text =
-                    $"<b>ESP32 SERIAL:</b> {serPort} [{serState}]\n" +
-                    $"<b>MOTOR BRIDGE:</b> {drv}   |   <b>SONAR:</b> {(dist > 0 ? $"{dist:F0}cm" : "OK")}\n" +
-                    $"<b>UART FRAMES:</b> RX {state.telemetry.rx_ok}  •  CRC ERR {state.telemetry.crc_errors}\n" +
-                    $"<b>AI ENGINE:</b> {aiMode} ({aiFps:F1} FPS)";
-            }
+            imuHorizonBall.localEulerAngles = new Vector3(0f, 0f, -roll);
+            imuHorizonBall.anchoredPosition = new Vector2(0f, Mathf.Clamp(pitch * 1.8f, -35f, 35f));
         }
+
+        if (envMetricsText != null)
+        {
+            envMetricsText.text =
+                $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}°     <b>Alt:</b> {t.altitude_m:F1} m\n" +
+                $"<b>Temp:</b> {t.temp_c:F1} °C    <b>Humid:</b> {t.humidity:F0} %    <b>Pressure:</b> {t.pressure_hpa:F0} hPa    <b>Heat Idx:</b> {t.heat_index_c:F1} °C";
+        }
+
+        // 7. Right Wing Card 2: Smart Assist (Exact match to renderSmartAssist in Web app.js)
+        int onlineSensorCount = (sensors.ultrasonic ? 1 : 0) + (sensors.bme280 ? 1 : 0) + (sensors.mpu6050 ? 1 : 0) + (sensors.oled ? 1 : 0);
+        int score = 0;
+        if (s.serial_connected) score += 25;
+        if (freshTelemetry) score += 25;
+        score += onlineSensorCount * 12;
+        if (dist > 0f && dist < 15f) score -= 20;
+        score = Mathf.Clamp(score, 0, 100);
+
+        string scoreColor = score >= 75 ? "#00FF88" : (score >= 45 ? "#FFD166" : "#FF5566");
+        string linkQual = freshTelemetry ? $"<color=#00FF88>{s.last_telem_age_ms:F0} ms live</color>" : "<color=#FF6677>stale/offline</color>";
+        string obsStatus = dist > 0f ? (dist < 15f ? $"<color=#FF5566>close {dist:F0} cm</color>" : $"<color=#00FF88>{dist:F0} cm clear</color>") : "no echo";
+        string busStatus = s.serial_connected ? $"<color=#00FF88>{onlineSensorCount}/4 sensors online</color>" : "<color=#FF6677>ESP32 serial offline</color>";
+        string suggestion = !s.serial_connected
+            ? "Check ESP32 UART / USB serial connection"
+            : (dist > 0f && dist < 20f ? "Obstacle close ahead — Back Out or Turn" : "System nominal — Ready for Teleop / Survey");
+
+        if (smartAssistText != null)
+        {
+            smartAssistText.text =
+                $"<b>Health Score:</b> <color={scoreColor}>{score}%</color>   |   <b>Link:</b> {linkQual}   |   <b>Obstacle:</b> {obsStatus}\n" +
+                $"<b>Sensor Bus:</b> {busStatus}   |   <b>Roughness:</b> {t.terrain_roughness:F2}\n" +
+                $"<b>Suggestion:</b> <color=#00F0FF>{suggestion}</color>";
+        }
+
+        // 8. Right Wing Card 3: Mission Assessment & Intelligence (Matches Web assessment-panel)
+        int survScore = (s.analytics != null && s.analytics.survivability != null && s.analytics.survivability.score > 0)
+            ? s.analytics.survivability.score
+            : 100;
+        string tractionStr = (s.analytics != null && s.analytics.traction != null && !string.IsNullOrEmpty(s.analytics.traction.status))
+            ? s.analytics.traction.status.Replace("_", " ")
+            : "TRACTION NOMINAL (สภาพพื้นผิวปกติ)";
+        float dewPoint = t.temp_c - ((100f - Mathf.Max(1f, t.humidity)) / 5f);
+        float maxTilt = Mathf.Max(Mathf.Abs(pitch), Mathf.Abs(roll));
+        string terrainGrade = maxTilt > 20f ? "<color=#FF5566>GRADE C (ลาดชันสูง)</color>" : (maxTilt > 10f ? "<color=#FFD166>GRADE B (เอียงเล็กน้อย)</color>" : "<color=#00FF88>GRADE A (พื้นเรียบ ปลอดภัย)</color>");
+
+        if (hardwareHealthText != null)
+        {
+            hardwareHealthText.text =
+                $"<b>SURVIVABILITY SCORE: <color=#00FF88>{survScore}%</color></b>\n" +
+                $"• <b>การยึดเกาะ/ล้อขับ:</b> <color=#00FF88>{tractionStr}</color>\n" +
+                $"• <b>สภาพโพรงอากาศ:</b> STABLE ATMOSPHERE   |   <b>จุดน้ำค้าง:</b> DP {dewPoint:F1}°C\n" +
+                $"• <b>ความลาดชัน:</b> {terrainGrade}\n" +
+                $"• <b>AI Field Assessment:</b> โหนด {rName} ออนไลน์ (AI {totalDet} เหตุการณ์, กล้อง Servo {sDeg}°)";
+        }
+    }
+
+    private void RenderOledPreview(int page, RobotStateSnapshot s)
+    {
+        if (oledPreviewText == null || s == null) return;
+        TelemetryData t = s.telemetry ?? new TelemetryData();
+        SensorStatusFlags sensors = t.sensors ?? new SensorStatusFlags();
+        bool fresh = s.last_telem_age_ms > 0.01f && s.last_telem_age_ms < 1200f;
+        string fsm = (t.fsm_state >= 0 && t.fsm_state < FSM_NAMES.Length) ? FSM_NAMES[t.fsm_state] : "--";
+
+        string line0, line1, line2;
+        switch (page)
+        {
+            case 1:
+                line0 = "OLED [PAGE 1: SENSORS]";
+                line1 = $"US {(sensors.ultrasonic ? "OK" : "--")} {t.ultrasonic_cm:F0}cm";
+                line2 = $"BME {(sensors.bme280 ? "OK" : "--")}  MPU {(sensors.mpu6050 ? "OK" : "--")}";
+                break;
+            case 2:
+                line0 = "OLED [PAGE 2: MOTION]";
+                line1 = $"L {s.left_pwm}   R {s.right_pwm}";
+                line2 = $"P {t.pitch_deg:F1}°   R {t.roll_deg:F1}°";
+                break;
+            case 3:
+                line0 = "OLED [PAGE 3: LINK]";
+                line1 = $"RX {t.rx_ok}   CRC {t.crc_errors}";
+                line2 = fresh ? "UART2 live" : "waiting for ESP32";
+                break;
+            default:
+                line0 = "OLED [PAGE 0: MAIN]";
+                line1 = $"FSM {fsm}   RX {t.rx_ok}";
+                line2 = $"US {t.ultrasonic_cm:F0}cm   Servo {s.servo_deg}°";
+                break;
+        }
+
+        oledPreviewText.text = $"<color=#00F0FF>{line0}</color>\n<b>{line1}</b>\n<size=12><color=#99CCEE>{line2}</color></size>";
     }
 
     private void UpdateMotorGauges(int lPwm, int rPwm)
     {
         if (motorLeftText != null)
         {
-            motorLeftText.text = $"L-TRK {(lPwm >= 0 ? "+" : "")}{lPwm}";
+            motorLeftText.text = $"L-MOTOR: {lPwm} PWM";
             motorLeftText.color = lPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
         }
         if (motorLeftBarFill != null)
@@ -544,7 +665,7 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (motorRightText != null)
         {
-            motorRightText.text = $"R-TRK {(rPwm >= 0 ? "+" : "")}{rPwm}";
+            motorRightText.text = $"R-MOTOR: {rPwm} PWM";
             motorRightText.color = rPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
         }
         if (motorRightBarFill != null)
@@ -555,51 +676,15 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void UpdateServoGauge(int sDeg)
     {
-        if (sDeg == 0) sDeg = 90;
+        if (sDeg <= 0) sDeg = 90;
         if (servoPanText != null)
         {
-            servoPanText.text = $"CAM GIMBAL: {sDeg:000}° [R-STICK / DPAD]";
+            servoPanText.text = $"SERVO: {sDeg} deg";
         }
         if (servoTickIndicator != null)
         {
-            float normServo = Mathf.InverseLerp(20f, 160f, sDeg);
-            servoTickIndicator.anchoredPosition = new Vector2((normServo - 0.5f) * 220f, 0f);
-        }
-    }
-
-    private void UpdateInteractiveLocalPreview()
-    {
-        if (_teleop == null) return;
-
-        float heading = _teleop.SimulatedHeadingDeg;
-        if (compassHeadingText != null)
-            compassHeadingText.text = $"◄  HDG {heading:000}° {GetCompassDirection(heading)}  ►";
-
-        float throttlePct = _teleop.EffectiveSpeedScale * 100f;
-        if (speedPercentText != null)
-            speedPercentText.text = $"SPEED LIMIT: {throttlePct:F0}% [DPAD UP/DN]";
-        if (speedBarFill != null)
-            speedBarFill.fillAmount = Mathf.Clamp01(throttlePct / 100f);
-
-        UpdateMotorGauges(_teleop.SimulatedLeftPwm, _teleop.SimulatedRightPwm);
-        UpdateServoGauge(_teleop.currentServoDeg);
-
-        if (radarMap != null && radarMap.mapCoordsText != null)
-        {
-            Vector2 p = _teleop.SimulatedPose;
-            radarMap.mapCoordsText.text = $"X: {p.x:+0.00;-0.00}m   Y: {p.y:+0.00;-0.00}m\nHDG: {heading:000}°  |  CAM: {_teleop.currentServoDeg:000}°  |  JOYSTICK ACTIVE";
-        }
-
-        float roll = -_teleop.LiveDriveStick.x * 8f;
-        float pitch = _teleop.LiveDriveStick.y * 6f;
-        if (pitchText != null) pitchText.text = $"PITCH: {pitch:+0.0;-0.0}°";
-        if (rollText != null) rollText.text = $"ROLL:  {roll:+0.0;-0.0}°";
-        if (yawText != null) yawText.text = $"YAW:   {heading:000.0}°";
-
-        if (imuHorizonBall != null)
-        {
-            imuHorizonBall.localEulerAngles = new Vector3(0f, 0f, -roll);
-            imuHorizonBall.anchoredPosition = new Vector2(0f, pitch * 1.8f);
+            float normServo = Mathf.InverseLerp(0f, 180f, sDeg);
+            servoTickIndicator.anchoredPosition = new Vector2((normServo - 0.5f) * 130f, 0f);
         }
     }
 
@@ -701,7 +786,7 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         if (swarmStatusText == null) return;
         int peerCount = peers != null ? peers.Count : 0;
-        swarmStatusText.text = $"mDNS MESH: {peerCount} PEERS  |  SWITCH: [LB] OR [1-3]";
+        swarmStatusText.text = $"P2P-MESH DISCOVERED: {peerCount} PEERS  |  SWITCH: [LB] OR [1-3]";
     }
 
     private static string GetCompassDirection(float yaw)

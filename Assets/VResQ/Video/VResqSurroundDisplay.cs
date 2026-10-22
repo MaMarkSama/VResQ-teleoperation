@@ -5,13 +5,6 @@ using VResQ.Core;
 
 namespace VResQ.Video
 {
-    /// <summary>
-    /// Surround View Modes:
-    /// - ExternalWorld (มองเห็นรอบนอก): See-through 3D environment all around the user.
-    /// - Surround360 (ภาพจากกล้องรอบตัว 360°): Full 360° panoramic cylinder/sphere camera wrap.
-    /// - Surround220 (ภาพจากกล้องรอบตัว 220°): Ultra-wide 220° curved surround camera wrap.
-    /// - Surround180 (ภาพจากกล้องรอบตัว 180°): Front hemisphere 180° curved surround camera wrap.
-    /// </summary>
     public enum SurroundViewMode
     {
         ExternalWorld = 0,
@@ -26,8 +19,7 @@ namespace VResQ.Video
 
     /// <summary>
     /// Generates and manages a 3D Panoramic Surround Camera Dome wrapping around the user.
-    /// Supports instant switching between seeing the outside 3D world (ExternalWorld / มองเห็นรอบนอก)
-    /// and full surround camera immersion (Surround360 / 220 / 180 / ภาพจากกล้องรอบตัว) with NO flat monitor box.
+    /// Bulletproof mesh and material lifecycle across Edit Mode and Play Mode so live video is ALWAYS visible.
     /// </summary>
     [ExecuteAlways]
     [RequireComponent(typeof(VResqCameraReceiver))]
@@ -36,16 +28,9 @@ namespace VResQ.Video
         public static VResqSurroundDisplay Instance { get; private set; }
 
         [Header("--- Surround Camera Dome Dimensions ---")]
-        [Tooltip("Distance from user eyes to the surround camera dome (meters)")]
-        [Range(1.5f, 6.0f)] public float radius = 2.8f;
-
-        [Tooltip("Total height of the surround camera dome (meters)")]
-        [Range(1.2f, 5.0f)] public float screenHeight = 2.8f;
-
-        [Tooltip("Vertical height offset relative to camera")]
+        [Range(1.5f, 6.0f)] public float radius = 2.6f;
+        [Range(1.2f, 5.0f)] public float screenHeight = 2.7f;
         public float heightOffset = 0.0f;
-
-        [Tooltip("Horizontal Field of View arc (degrees): 360 = full wrap, 220 = ultra-wide, 180 = hemisphere")]
         [Range(90f, 360f)] public float arcAngle = 360f;
 
         [Header("--- Mesh Resolution ---")]
@@ -54,8 +39,6 @@ namespace VResQ.Video
 
         [Header("--- Active View Mode ---")]
         public SurroundViewMode currentViewMode = SurroundViewMode.Surround360;
-
-        [Header("--- Last Active Camera Mode (for 1-button toggle) ---")]
         public SurroundViewMode lastCameraSurroundMode = SurroundViewMode.Surround360;
 
         [Header("--- Material & Shader ---")]
@@ -90,7 +73,7 @@ namespace VResQ.Video
                 targetCamera = Camera.main.transform;
             }
 
-            SetupSurroundScreen();
+            EnsureSurroundScreenReady(forceRebuildMesh: true);
             SyncFromFrameworkConfig();
 
             if (VResqFrameworkConfig.Instance != null)
@@ -113,46 +96,65 @@ namespace VResQ.Video
             ApplyGeometryAndMode();
         }
 
-        private void SetupSurroundScreen()
+        private void EnsureSurroundScreenReady(bool forceRebuildMesh = false)
         {
-            if (_screenObject != null && _meshFilter != null && _meshRenderer != null) return;
-
-            Transform existing = transform.Find("Curved_Surround_Screen");
-            if (existing != null)
+            if (_screenObject == null)
             {
-                _screenObject = existing.gameObject;
+                Transform existing = transform.Find("Curved_Surround_Screen");
+                if (existing != null)
+                {
+                    _screenObject = existing.gameObject;
+                }
+                else
+                {
+                    _screenObject = new GameObject("Curved_Surround_Screen");
+                    _screenObject.transform.SetParent(transform, false);
+                }
+            }
+
+            if (_meshFilter == null)
+            {
                 _meshFilter = _screenObject.GetComponent<MeshFilter>() ?? _screenObject.AddComponent<MeshFilter>();
+            }
+            if (_meshRenderer == null)
+            {
                 _meshRenderer = _screenObject.GetComponent<MeshRenderer>() ?? _screenObject.AddComponent<MeshRenderer>();
             }
-            else
+
+            if (_runtimeMaterial == null || _meshRenderer.sharedMaterial == null)
             {
-                _screenObject = new GameObject("Curved_Surround_Screen");
-                _screenObject.transform.SetParent(transform, false);
-                _meshFilter = _screenObject.AddComponent<MeshFilter>();
-                _meshRenderer = _screenObject.AddComponent<MeshRenderer>();
+                Shader shader = Shader.Find("Sprites/Default") ??
+                                Shader.Find("Unlit/Texture") ??
+                                Shader.Find("Universal Render Pipeline/Unlit");
+
+                _runtimeMaterial = surroundMaterial != null ? new Material(surroundMaterial) : new Material(shader);
+                _runtimeMaterial.name = "SurroundScreen_RuntimeMaterial";
+                _runtimeMaterial.color = Color.white;
+
+                if (_runtimeMaterial.HasProperty("_BaseColor"))
+                {
+                    _runtimeMaterial.SetColor("_BaseColor", Color.white);
+                }
+                if (_runtimeMaterial.HasProperty("_Cull"))
+                {
+                    _runtimeMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+                }
+
+                _meshRenderer.sharedMaterial = _runtimeMaterial;
+                _meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                _meshRenderer.receiveShadows = false;
             }
 
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
-                            Shader.Find("Unlit/Texture") ??
-                            Shader.Find("Sprites/Default");
-
-            _runtimeMaterial = surroundMaterial != null ? new Material(surroundMaterial) : new Material(shader);
-            _runtimeMaterial.name = "SurroundScreen_Material";
-
-            if (_runtimeMaterial.HasProperty("_Cull"))
+            if (forceRebuildMesh || _screenMesh == null || _meshFilter.sharedMesh == null || _screenMesh.vertexCount == 0)
             {
-                _runtimeMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+                GenerateCurvedMesh(arcAngle, radius, screenHeight);
             }
-
-            _meshRenderer.sharedMaterial = _runtimeMaterial;
-            _meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            _meshRenderer.receiveShadows = false;
-
-            GenerateCurvedMesh(arcAngle, radius, screenHeight);
         }
 
         private void Update()
         {
+            EnsureSurroundScreenReady(forceRebuildMesh: false);
+
             if (targetCamera == null && Camera.main != null)
             {
                 targetCamera = Camera.main.transform;
@@ -163,27 +165,32 @@ namespace VResQ.Video
                 Vector3 camPos = targetCamera.position;
                 camPos.y += heightOffset;
                 _screenObject.transform.position = camPos;
-
-                // Keep the surround dome aligned with robot/world forward so the user can look 360° around inside it!
                 _screenObject.transform.rotation = Quaternion.identity;
             }
 
-            if (Application.isPlaying && _cameraReceiver != null && _cameraReceiver.VideoTexture != null && _runtimeMaterial != null)
+            if (_cameraReceiver == null)
             {
-                if (_runtimeMaterial.mainTexture != _cameraReceiver.VideoTexture)
+                _cameraReceiver = GetComponent<VResqCameraReceiver>();
+            }
+
+            if (_cameraReceiver != null && _cameraReceiver.VideoTexture != null && _runtimeMaterial != null)
+            {
+                Texture2D tex = _cameraReceiver.VideoTexture;
+                if (_runtimeMaterial.mainTexture != tex)
                 {
-                    _runtimeMaterial.mainTexture = _cameraReceiver.VideoTexture;
+                    _runtimeMaterial.mainTexture = tex;
                 }
-                if (_runtimeMaterial.HasProperty("_BaseMap") && _runtimeMaterial.GetTexture("_BaseMap") != _cameraReceiver.VideoTexture)
+                if (_runtimeMaterial.HasProperty("_MainTex") && _runtimeMaterial.GetTexture("_MainTex") != tex)
                 {
-                    _runtimeMaterial.SetTexture("_BaseMap", _cameraReceiver.VideoTexture);
+                    _runtimeMaterial.SetTexture("_MainTex", tex);
+                }
+                if (_runtimeMaterial.HasProperty("_BaseMap") && _runtimeMaterial.GetTexture("_BaseMap") != tex)
+                {
+                    _runtimeMaterial.SetTexture("_BaseMap", tex);
                 }
             }
         }
 
-        /// <summary>
-        /// Instant 1-button toggle between มองเห็นรอบนอก (ExternalWorld) and ภาพจากกล้องรอบตัว (Surround Camera).
-        /// </summary>
         public void ToggleExternalVsCamera()
         {
             if (currentViewMode == SurroundViewMode.ExternalWorld)
@@ -199,9 +206,6 @@ namespace VResQ.Video
             }
         }
 
-        /// <summary>
-        /// Cycles through all 4 modes: Surround360 -> Surround220 -> Surround180 -> ExternalWorld (มองเห็นรอบนอก).
-        /// </summary>
         public void CycleNextViewMode()
         {
             SurroundViewMode next = currentViewMode switch
@@ -250,28 +254,29 @@ namespace VResQ.Video
             {
                 ApplyGeometryAndMode();
             }
-
-            Debug.Log($"<color=cyan>[SurroundDisplay]</color> View Mode -> {currentViewMode} ({arcAngle}°)");
         }
 
         public void ApplyGeometryAndMode()
         {
-            if (_screenObject == null) SetupSurroundScreen();
+            EnsureSurroundScreenReady(forceRebuildMesh: false);
             if (_screenObject == null) return;
 
             if (currentViewMode == SurroundViewMode.ExternalWorld)
             {
-                // มองเห็นรอบนอก (See-through 3D external world)
                 _screenObject.SetActive(false);
             }
             else
             {
-                // ภาพจากกล้องรอบตัว (Surround Camera 360° / 220° / 180°)
                 _screenObject.SetActive(true);
                 GenerateCurvedMesh(arcAngle, radius, screenHeight);
             }
         }
 
+        /// <summary>
+        /// Generates a double-sided cylindrical/spherical curved screen mesh so it is 100% visible from inside.
+        /// For 360° mode, maps the front 200° directly and mirrors the rear 160° seamlessly so the camera image
+        /// is never overly stretched and has no hard seam behind the user.
+        /// </summary>
         public void GenerateCurvedMesh(float totalArcDeg, float r, float h)
         {
             if (_meshFilter == null) return;
@@ -286,14 +291,16 @@ namespace VResQ.Video
                 _screenMesh.Clear();
             }
 
-            int hCount = Mathf.Max(16, horizontalSegments);
-            int vCount = Mathf.Max(4, verticalSegments);
+            int hCount = Mathf.Max(24, horizontalSegments);
+            int vCount = Mathf.Max(6, verticalSegments);
 
             int vertexCount = (hCount + 1) * (vCount + 1);
             Vector3[] vertices = new Vector3[vertexCount];
             Vector3[] normals = new Vector3[vertexCount];
+            Color32[] colors = new Color32[vertexCount];
             Vector2[] uvs = new Vector2[vertexCount];
-            int[] triangles = new int[hCount * vCount * 6];
+            // Double-sided triangles (12 indices per quad) so culling never hides the mesh!
+            int[] triangles = new int[hCount * vCount * 12];
 
             float halfArcRad = (totalArcDeg * 0.5f) * Mathf.Deg2Rad;
             float startAngleRad = -halfArcRad;
@@ -301,28 +308,49 @@ namespace VResQ.Video
 
             float halfH = h * 0.5f;
             float yStep = h / vCount;
+            Color32 white = new Color32(255, 255, 255, 255);
 
             int vIdx = 0;
             for (int y = 0; y <= vCount; y++)
             {
                 float currentY = -halfH + (y * yStep);
                 float v = (float)y / vCount;
+                float vNorm = (v - 0.5f) * 2f;
+                float sphericalRadius = r * Mathf.Lerp(1.0f, 0.93f, vNorm * vNorm);
 
                 for (int x = 0; x <= hCount; x++)
                 {
                     float currentAngleRad = startAngleRad + (x * angleStepRad);
-                    float u = (float)x / hCount;
+                    float angleDeg = currentAngleRad * Mathf.Rad2Deg;
 
-                    // Slight spherical vertical curvature for natural surround immersion
-                    float vNorm = (v - 0.5f) * 2f; // -1 to +1
-                    float sphericalRadius = r * Mathf.Lerp(1.0f, 0.92f, vNorm * vNorm);
+                    float u;
+                    if (totalArcDeg >= 300f)
+                    {
+                        // Seamless 360° wrap: front [-100°..+100°] maps 0..1, rear mirrors smoothly 1..0
+                        if (angleDeg >= -100f && angleDeg <= 100f)
+                        {
+                            u = Mathf.InverseLerp(-100f, 100f, angleDeg);
+                        }
+                        else if (angleDeg > 100f)
+                        {
+                            u = 1.0f - Mathf.InverseLerp(100f, 180f, angleDeg) * 0.5f;
+                        }
+                        else
+                        {
+                            u = Mathf.InverseLerp(-180f, -100f, angleDeg) * 0.5f;
+                        }
+                    }
+                    else
+                    {
+                        u = (float)x / hCount;
+                    }
 
                     float sin = Mathf.Sin(currentAngleRad);
                     float cos = Mathf.Cos(currentAngleRad);
 
-                    Vector3 pos = new Vector3(sin * sphericalRadius, currentY, cos * sphericalRadius);
-                    vertices[vIdx] = pos;
+                    vertices[vIdx] = new Vector3(sin * sphericalRadius, currentY, cos * sphericalRadius);
                     normals[vIdx] = -new Vector3(sin, 0f, cos).normalized;
+                    colors[vIdx] = white;
                     uvs[vIdx] = new Vector2(u, v);
                     vIdx++;
                 }
@@ -336,32 +364,39 @@ namespace VResQ.Video
                     int row1 = y * (hCount + 1);
                     int row2 = (y + 1) * (hCount + 1);
 
-                    triangles[tIdx++] = row1 + x;
-                    triangles[tIdx++] = row1 + x + 1;
-                    triangles[tIdx++] = row2 + x;
+                    int i0 = row1 + x;
+                    int i1 = row1 + x + 1;
+                    int i2 = row2 + x;
+                    int i3 = row2 + x + 1;
 
-                    triangles[tIdx++] = row1 + x + 1;
-                    triangles[tIdx++] = row2 + x + 1;
-                    triangles[tIdx++] = row2 + x;
+                    // Side A (Inward facing)
+                    triangles[tIdx++] = i0;
+                    triangles[tIdx++] = i1;
+                    triangles[tIdx++] = i2;
+
+                    triangles[tIdx++] = i1;
+                    triangles[tIdx++] = i3;
+                    triangles[tIdx++] = i2;
+
+                    // Side B (Outward facing - guarantees visibility regardless of shader Cull mode)
+                    triangles[tIdx++] = i0;
+                    triangles[tIdx++] = i2;
+                    triangles[tIdx++] = i1;
+
+                    triangles[tIdx++] = i1;
+                    triangles[tIdx++] = i2;
+                    triangles[tIdx++] = i3;
                 }
             }
 
             _screenMesh.vertices = vertices;
             _screenMesh.normals = normals;
+            _screenMesh.colors32 = colors;
             _screenMesh.uv = uvs;
             _screenMesh.triangles = triangles;
             _screenMesh.RecalculateBounds();
 
             _meshFilter.sharedMesh = _screenMesh;
-        }
-
-        private void OnDestroy()
-        {
-            if (Application.isPlaying)
-            {
-                if (_runtimeMaterial != null) Destroy(_runtimeMaterial);
-                if (_screenMesh != null) Destroy(_screenMesh);
-            }
         }
     }
 }
