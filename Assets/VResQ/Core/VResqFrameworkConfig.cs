@@ -43,14 +43,14 @@ namespace VResQ.Core
         public bool autoFallbackToOnlineNode = true;
         public float fleetProbeIntervalSec = 2.5f;
 
-        // 2. Surround Panoramic Display
-        public SurroundViewMode viewMode = SurroundViewMode.Surround180;
+        // 2. Surround Panoramic Camera vs External World View (NO flat screen)
+        public SurroundViewMode viewMode = SurroundViewMode.Surround360;
         public float surroundRadius = 2.8f;
-        public float surroundHeight = 2.5f;
-        public float surroundArcAngle = 180f;
+        public float surroundHeight = 2.8f;
+        public float surroundArcAngle = 360f;
         public float surroundVerticalOffset = 0.0f;
-        public bool showCenterMonitorInSurround = true;
-        public float centerMonitorOpacityInSurround = 0.92f;
+        public bool showCenterMonitorInSurround = false;
+        public float centerMonitorOpacityInSurround = 0.0f;
 
         // 3. HUD Ergonomics & Visual Theme
         public CockpitTheme theme = CockpitTheme.CyberCyan;
@@ -58,12 +58,16 @@ namespace VResQ.Core
         public float hudHeightOffset = -0.04f;
         public float hudScale = 0.00085f;
         public float wingPanelAngle = 24f;
-        public float panelOpacity = 0.88f;
+        public float panelOpacity = 0.82f;
         public bool smoothFollowHead = true;
-        public float followDeadzoneAngle = 35f;
+        public float followDeadzoneAngle = 25f;
 
-        // 4. Teleoperation & Safety
+        // 4. Joystick / Gamepad & Teleoperation Control
+        public bool enableJoystickControl = true;
         public float speedScale = 0.75f;
+        public float stickDeadzone = 0.10f;
+        public bool rightStickControlsLookAndGimbal = true;
+        public float lookYawSpeedDegPerSec = 95f;
         public bool requireDeadmanSwitch = false;
         public int servoStepDeg = 5;
         public float collisionAlertCm = 25f;
@@ -136,7 +140,6 @@ namespace VResQ.Core
                 Debug.LogWarning($"[VResqConfig] Could not load profile: {ex.Message}");
             }
 
-            // Ensure 3 default fleet nodes exist
             if (Profile.fleetNodes == null || Profile.fleetNodes.Length < 3)
             {
                 Profile.fleetNodes = new RobotNodeEndpoint[]
@@ -170,7 +173,7 @@ namespace VResQ.Core
 
         public Color GetPanelBackgroundColor()
         {
-            Color baseCol = Profile.theme switch
+            return Profile.theme switch
             {
                 CockpitTheme.CyberCyan => new Color(0.02f, 0.06f, 0.12f, Profile.panelOpacity),
                 CockpitTheme.EmeraldRescue => new Color(0.02f, 0.10f, 0.07f, Profile.panelOpacity),
@@ -178,7 +181,6 @@ namespace VResQ.Core
                 CockpitTheme.CrimsonOps => new Color(0.11f, 0.02f, 0.04f, Profile.panelOpacity),
                 _ => new Color(0.02f, 0.06f, 0.12f, Profile.panelOpacity)
             };
-            return baseCol;
         }
     }
 }

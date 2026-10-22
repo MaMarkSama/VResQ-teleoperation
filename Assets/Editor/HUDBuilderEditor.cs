@@ -20,15 +20,17 @@ public class HUDBuilderEditor : EditorWindow
         win.Show();
     }
 
-    [MenuItem("V-ResQ/Rebuild Tactical VR Cockpit HUD (Clean UX/UI)", false, 2)]
+    [MenuItem("V-ResQ/Rebuild Open-Visor Surround HUD (No Flat Screen)", false, 2)]
     public static void BuildFullTacticalHUD()
     {
         RebuildSceneCleanly();
     }
 
     /// <summary>
-    /// Can be called from MenuItem or Unity Batchmode (-executeMethod HUDBuilderEditor.RebuildSceneCleanly)
-    /// Rebuilds the entire Tactical_VR_HUD_Root cleanly with zero overlapping elements and saves the scene.
+    /// Rebuilds SampleScene.unity with:
+    /// 1. Open See-Through Center Visor (NO flat rectangular monitor blocking the middle!)
+    /// 2. 3D 360°/220°/180° Surround Camera Dome vs. External 3D World toggle
+    /// 3. 100% Joystick / Gamepad / XR Controller integration with Live Joystick Vector Scope
     /// </summary>
     public static void RebuildSceneCleanly()
     {
@@ -50,7 +52,10 @@ public class HUDBuilderEditor : EditorWindow
             mainCam.nearClipPlane = 0.05f;
         }
 
-        // 2. Remove all existing Tactical_VR_HUD_Root instances to eliminate legacy overlap
+        // 2. Ensure 3D External World Environment exists so "มองเห็นรอบนอก" has clear 360° 3D spatial reference
+        SetupExternal3DWorldEnvironment();
+
+        // 3. Remove all existing Tactical_VR_HUD_Root instances
         var existingHuds = Object.FindObjectsByType<RescueRobotVRHUD>(FindObjectsInactive.Include, FindObjectsSortMode.None);
         foreach (var oldHud in existingHuds)
         {
@@ -66,7 +71,7 @@ public class HUDBuilderEditor : EditorWindow
             strayRoot = GameObject.Find("Tactical_VR_HUD_Root");
         }
 
-        // 3. Create Master World-Space Canvas Root
+        // 4. Create Master World-Space Canvas Root
         GameObject hudRoot = new GameObject("Tactical_VR_HUD_Root");
         Canvas canvas = hudRoot.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.WorldSpace;
@@ -75,7 +80,6 @@ public class HUDBuilderEditor : EditorWindow
         scaler.dynamicPixelsPerUnit = 10f;
         hudRoot.AddComponent<GraphicRaycaster>();
 
-        // Add tracked device graphic raycaster if XR UI package is available
         var xrRaycasterType = System.Type.GetType("UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster, Unity.XR.Interaction.Toolkit");
         if (xrRaycasterType != null)
         {
@@ -86,13 +90,19 @@ public class HUDBuilderEditor : EditorWindow
         rootRect.sizeDelta = new Vector2(1920f, 1080f);
         rootRect.localScale = new Vector3(0.00085f, 0.00085f, 0.00085f);
 
-        // 4. Attach Core Framework Components
+        // 5. Attach Core Framework Components
         VResqFrameworkConfig cfg = hudRoot.AddComponent<VResqFrameworkConfig>();
+        cfg.Profile.viewMode = SurroundViewMode.Surround360;
+        cfg.Profile.surroundArcAngle = 360f;
+        cfg.Profile.showCenterMonitorInSurround = false;
+
         VResqClient client = hudRoot.AddComponent<VResqClient>();
         client.robotIp = "10.66.68.52";
         client.port = 8000;
 
         VResqCameraReceiver camReceiver = hudRoot.AddComponent<VResqCameraReceiver>();
+        camReceiver.targetRawImage = null; // Strictly NO flat screen in center!
+
         VResqSurroundDisplay surround = hudRoot.AddComponent<VResqSurroundDisplay>();
         VResqTeleopController teleop = hudRoot.AddComponent<VResqTeleopController>();
         TacticalHUDFollow follow = hudRoot.AddComponent<TacticalHUDFollow>();
@@ -103,6 +113,7 @@ public class HUDBuilderEditor : EditorWindow
             canvas.worldCamera = mainCam;
             follow.targetCamera = mainCam.transform;
             surround.targetCamera = mainCam.transform;
+            teleop.cameraRigTransform = mainCam.transform.parent != null ? mainCam.transform.parent : mainCam.transform;
             follow.followDistance = cfg.Profile.hudDistance;
             follow.heightOffset = cfg.Profile.hudHeightOffset;
             follow.ResetHUDOrientation();
@@ -112,11 +123,14 @@ public class HUDBuilderEditor : EditorWindow
             hudRoot.transform.position = new Vector3(0f, 1.2f, 2.25f);
         }
 
+        // Build the 3D Surround Dome immediately so it is ready in the scene
+        surround.SyncFromFrameworkConfig();
+
         // Palette
-        Color cPanelBg = new Color(0.02f, 0.06f, 0.12f, 0.88f);
-        Color cCardBg = new Color(0.04f, 0.11f, 0.20f, 0.90f);
+        Color cPanelBg = new Color(0.02f, 0.06f, 0.12f, 0.80f);
+        Color cCardBg = new Color(0.04f, 0.11f, 0.20f, 0.84f);
         Color cCyan = new Color(0.0f, 0.92f, 1.0f, 1.0f);
-        Color cCyanDim = new Color(0.0f, 0.70f, 0.88f, 0.55f);
+        Color cCyanDim = new Color(0.0f, 0.70f, 0.88f, 0.50f);
         Color cGreen = new Color(0.0f, 1.0f, 0.55f, 1.0f);
         Color cAmber = new Color(1.0f, 0.78f, 0.18f, 1.0f);
         Color cRed = new Color(1.0f, 0.22f, 0.28f, 1.0f);
@@ -130,23 +144,23 @@ public class HUDBuilderEditor : EditorWindow
         CreateBorder(topBar.transform, new Vector2(1740f, 56f), cCyanDim, 1.5f);
 
         ctrl.robotIdText = CreateTMP("RobotID", topBar.transform, "● VRESQ-NODE-ZERO  [LEADER]  •  10.66.68.52",
-            new Vector2(-600f, 0f), new Vector2(480f, 44f), 20, cCyan, TextAlignmentOptions.Left, true);
+            new Vector2(-615f, 0f), new Vector2(460f, 44f), 19, cCyan, TextAlignmentOptions.Left, true);
         ctrl.themeAccentGraphics.Add(ctrl.robotIdText);
 
-        ctrl.latencyText = CreateTMP("Latency", topBar.transform, "WS: ONLINE  |  VIDEO: 25 FPS",
-            new Vector2(-160f, 0f), new Vector2(340f, 44f), 18, cGreen, TextAlignmentOptions.Center, true);
+        ctrl.latencyText = CreateTMP("Latency", topBar.transform, "WS: ONLINE  |  SURROUND CAM: 25 FPS",
+            new Vector2(-210f, 0f), new Vector2(330f, 44f), 17, cGreen, TextAlignmentOptions.Center, true);
 
-        ctrl.viewModeBadgeText = CreateTMP("ViewModeBadge", topBar.transform, "VIEW: 180° DOME [V]",
-            new Vector2(175f, 0f), new Vector2(280f, 44f), 17, cAmber, TextAlignmentOptions.Center, true);
+        ctrl.viewModeBadgeText = CreateTMP("ViewModeBadge", topBar.transform, "🎥 VIEW: 360° SURROUND CAM (ภาพรอบตัว) [Y/V]",
+            new Vector2(160f, 0f), new Vector2(380f, 44f), 16, cAmber, TextAlignmentOptions.Center, true);
 
         ctrl.aiStatusBadgeText = CreateTMP("AIStatusBadge", topBar.transform, "AI VISION: 0 TARGETS (8.5 FPS)",
-            new Vector2(475f, 0f), new Vector2(300f, 44f), 16, cTextLight, TextAlignmentOptions.Center, true);
+            new Vector2(490f, 0f), new Vector2(260f, 44f), 15, cTextLight, TextAlignmentOptions.Center, true);
 
         ctrl.clockText = CreateTMP("Clock", topBar.transform, "12:00:00",
-            new Vector2(695f, 0f), new Vector2(130f, 44f), 20, Color.white, TextAlignmentOptions.Right, true);
+            new Vector2(685f, 0f), new Vector2(110f, 44f), 19, Color.white, TextAlignmentOptions.Right, true);
 
-        CreateButton("BTN_CONFIG_TOP", topBar.transform, "⚙ CONFIG",
-            new Vector2(810f, 0f), new Vector2(100f, 38f), new Color(0.0f, 0.45f, 0.65f, 0.95f), 15);
+        CreateButton("BTN_EXT_CAM_TOP", topBar.transform, "🌐 รอบนอก/กล้อง [Y]",
+            new Vector2(800f, 0f), new Vector2(124f, 38f), new Color(0.0f, 0.50f, 0.42f, 0.95f), 13);
 
         // =========================================================================
         // 2. LEFT WING PANEL: TACTICAL RADAR & SWARM NODE SWITCHER (420 x 790 at X = -690, Y = +20)
@@ -162,7 +176,7 @@ public class HUDBuilderEditor : EditorWindow
         ctrl.themeAccentGraphics.Add(hdrLeft);
         CreateBox("Header_Left_Line", leftPanel.transform, new Vector2(0f, 346f), new Vector2(390f, 2f), cCyanDim);
 
-        // 2D Radar Scope Card (380 x 330 at Y = +168)
+        // 2D Radar Scope Card
         GameObject radarCard = CreatePanel("Radar_Card", leftPanel.transform, new Vector2(0f, 168f), new Vector2(388f, 332f), cCardBg);
         GameObject radarScreenObj = new GameObject("Radar_Screen");
         radarScreenObj.transform.SetParent(radarCard.transform, false);
@@ -176,15 +190,13 @@ public class HUDBuilderEditor : EditorWindow
         VResqRadarMap radarComp = leftPanel.AddComponent<VResqRadarMap>();
         radarComp.radarRawImage = radarRawImg;
         radarComp.mapCoordsText = CreateTMP("MapCoords", radarCard.transform,
-            "X: +0.00m   Y: +0.00m\nHDG: 000°  |  CAM: 090°  |  VRESQ-NODE-ZERO",
+            "X: +0.00m   Y: +0.00m\nHDG: 000°  |  CAM: 090°  |  JOYSTICK READY",
             new Vector2(0f, -134f), new Vector2(370f, 44f), 14, cTextLight, TextAlignmentOptions.Center, false);
         ctrl.radarMap = radarComp;
 
-        // Swarm Fleet Node Switcher Header
-        var hdrSwarm = CreateTMP("Header_Swarm", leftPanel.transform, "SWARM NODE SELECTOR (CLICK OR KEY 1-3)",
+        CreateTMP("Header_Swarm", leftPanel.transform, "SWARM NODE SELECTOR ([LB] OR KEY 1-3)",
             new Vector2(0f, -20f), new Vector2(388f, 26f), 15, cAmber, TextAlignmentOptions.Left, true);
 
-        // 3 Interactive Node Cards (Node 0, Node 1, Node 2)
         ctrl.nodeCardButtons = new Button[3];
         ctrl.nodeCardBgs = new Image[3];
         ctrl.nodeCardDots = new Image[3];
@@ -218,11 +230,11 @@ public class HUDBuilderEditor : EditorWindow
         }
 
         ctrl.swarmStatusText = CreateTMP("SwarmStatus", leftPanel.transform,
-            "mDNS MESH DISCOVERY: ACTIVE  |  AUTO-FAILOVER ON",
+            "mDNS MESH: ACTIVE  |  SWITCH: [LB] OR [1-3]",
             new Vector2(0f, -345f), new Vector2(388f, 40f), 14, cCyan, TextAlignmentOptions.Center, false);
 
         // =========================================================================
-        // 3. CENTER HUD VIEWPORT (880 x 790 at X = 0, Y = +20)
+        // 3. OPEN SEE-THROUGH CENTER VISOR (NO FLAT SCREEN!) (880 x 790 at X = 0, Y = +20)
         // =========================================================================
         GameObject centerHUD = new GameObject("Center_HUD");
         centerHUD.transform.SetParent(hudRoot.transform, false);
@@ -231,33 +243,34 @@ public class HUDBuilderEditor : EditorWindow
         centerRect.sizeDelta = new Vector2(880f, 790f);
 
         // Top Compass Tape Card
-        GameObject compassCard = CreatePanel("Compass_Card", centerHUD.transform, new Vector2(0f, 358f), new Vector2(520f, 48f), cPanelBg);
-        CreateBorder(compassCard.transform, new Vector2(520f, 48f), cCyanDim, 1.5f);
+        GameObject compassCard = CreatePanel("Compass_Card", centerHUD.transform, new Vector2(0f, 358f), new Vector2(540f, 46f), cPanelBg);
+        CreateBorder(compassCard.transform, new Vector2(540f, 46f), cCyanDim, 1.5f);
         ctrl.compassHeadingText = CreateTMP("Compass_Heading", compassCard.transform, "◄  HDG 000° N  ►",
-            Vector2.zero, new Vector2(500f, 42f), 24, cCyan, TextAlignmentOptions.Center, true);
+            Vector2.zero, new Vector2(520f, 40f), 23, cCyan, TextAlignmentOptions.Center, true);
         ctrl.themeAccentGraphics.Add(ctrl.compassHeadingText);
 
-        // Live Video Screen Frame (780 x 440 at Y = +92)
-        GameObject videoFrame = CreatePanel("Center_VideoFrame", centerHUD.transform, new Vector2(0f, 92f), new Vector2(788f, 448f), new Color(0.01f, 0.03f, 0.06f, 0.55f));
-        CreateBorder(videoFrame.transform, new Vector2(788f, 448f), cCyan, 2f);
+        // Transparent Open Visor Area (Y = +100): Minimalist Aiming Crosshair & Corner Brackets ONLY (100% see-through!)
+        GameObject openVisorArea = new GameObject("Open_Visor_Reticle");
+        openVisorArea.transform.SetParent(centerHUD.transform, false);
+        RectTransform visorRt = openVisorArea.AddComponent<RectTransform>();
+        visorRt.anchoredPosition = new Vector2(0f, 95f);
+        visorRt.sizeDelta = new Vector2(760f, 420f);
 
-        GameObject vsObj = new GameObject("Center_VideoScreen");
-        vsObj.transform.SetParent(centerHUD.transform, false);
-        RectTransform vsRt = vsObj.AddComponent<RectTransform>();
-        vsRt.anchoredPosition = new Vector2(0f, 92f);
-        vsRt.sizeDelta = new Vector2(780f, 440f);
-        RawImage vsRaw = vsObj.AddComponent<RawImage>();
-        vsRaw.color = new Color(1f, 1f, 1f, 0.92f);
-        ctrl.centerVideoScreen = vsRaw;
-        camReceiver.targetRawImage = vsRaw;
+        // Subtle Center Crosshair
+        CreateBox("Reticle_H_Left", openVisorArea.transform, new Vector2(-24f, 0f), new Vector2(22f, 2f), new Color(0f, 1f, 0.85f, 0.45f));
+        CreateBox("Reticle_H_Right", openVisorArea.transform, new Vector2(24f, 0f), new Vector2(22f, 2f), new Color(0f, 1f, 0.85f, 0.45f));
+        CreateBox("Reticle_V_Top", openVisorArea.transform, new Vector2(0f, 24f), new Vector2(2f, 22f), new Color(0f, 1f, 0.85f, 0.45f));
+        CreateBox("Reticle_V_Bot", openVisorArea.transform, new Vector2(0f, -24f), new Vector2(2f, 22f), new Color(0f, 1f, 0.85f, 0.45f));
 
-        // Subtle Center Tactical Reticle inside Video Screen
-        CreateBox("Reticle_H", vsObj.transform, Vector2.zero, new Vector2(36f, 1.5f), new Color(0f, 1f, 0.8f, 0.35f));
-        CreateBox("Reticle_V", vsObj.transform, Vector2.zero, new Vector2(1.5f, 36f), new Color(0f, 1f, 0.8f, 0.35f));
+        // Corner Target Brackets (leaves 99% of center completely unobstructed!)
+        CreateCornerBracket(openVisorArea.transform, new Vector2(-360f, 195f), new Vector2(1f, -1f), cCyanDim);
+        CreateCornerBracket(openVisorArea.transform, new Vector2(360f, 195f), new Vector2(-1f, -1f), cCyanDim);
+        CreateCornerBracket(openVisorArea.transform, new Vector2(-360f, -195f), new Vector2(1f, 1f), cCyanDim);
+        CreateCornerBracket(openVisorArea.transform, new Vector2(360f, -195f), new Vector2(-1f, 1f), cCyanDim);
 
-        // AI Detection Bounding Box Overlay Container
+        // AI Detection Bounding Box Overlay Container inside Open Visor
         GameObject bboxContainerObj = new GameObject("AI_BBox_Container");
-        bboxContainerObj.transform.SetParent(vsObj.transform, false);
+        bboxContainerObj.transform.SetParent(openVisorArea.transform, false);
         RectTransform bboxRt = bboxContainerObj.AddComponent<RectTransform>();
         bboxRt.anchorMin = Vector2.zero;
         bboxRt.anchorMax = Vector2.one;
@@ -265,53 +278,62 @@ public class HUDBuilderEditor : EditorWindow
         bboxRt.offsetMax = Vector2.zero;
         ctrl.aiBboxContainer = bboxRt;
 
-        ctrl.videoOverlayText = CreateTMP("Video_Status_Overlay", vsObj.transform, "",
-            new Vector2(0f, -195f), new Vector2(740f, 32f), 15, cCyan, TextAlignmentOptions.Center, false);
+        // Gimbal & Live Controller Status Bar (Y = -155)
+        GameObject gimbalBar = CreatePanel("Gimbal_And_Controller_Bar", centerHUD.transform, new Vector2(0f, -155f), new Vector2(820f, 42f), cPanelBg);
+        CreateBorder(gimbalBar.transform, new Vector2(820f, 42f), cCyanDim, 1f);
 
-        // Gimbal Servo Angle Indicator Bar (Y = -160)
-        GameObject gimbalBar = CreatePanel("Gimbal_Bar", centerHUD.transform, new Vector2(0f, -160f), new Vector2(780f, 40f), cPanelBg);
-        CreateBorder(gimbalBar.transform, new Vector2(780f, 40f), cCyanDim, 1f);
-        ctrl.servoPanText = CreateTMP("ServoPanText", gimbalBar.transform, "GIMBAL PAN: 090° [Q/E]",
-            new Vector2(-220f, 0f), new Vector2(300f, 34f), 16, cCyan, TextAlignmentOptions.Left, true);
+        ctrl.controllerStatusText = CreateTMP("ControllerStatusTxt", gimbalBar.transform,
+            "🎮 JOYSTICK ACTIVE: READY   |   STICK X:+0.00  Y:+0.00",
+            new Vector2(-165f, 0f), new Vector2(460f, 36f), 14, cGreen, TextAlignmentOptions.Left, true);
 
-        GameObject servoTrack = CreateBox("Servo_Track", gimbalBar.transform, new Vector2(130f, 0f), new Vector2(240f, 8f), new Color(0.1f, 0.25f, 0.35f, 0.9f));
-        GameObject servoTick = CreateBox("Servo_Tick", servoTrack.transform, Vector2.zero, new Vector2(14f, 22f), cAmber);
+        ctrl.servoPanText = CreateTMP("ServoPanText", gimbalBar.transform, "CAM GIMBAL: 090°",
+            new Vector2(155f, 0f), new Vector2(160f, 36f), 14, cCyan, TextAlignmentOptions.Right, true);
+
+        GameObject servoTrack = CreateBox("Servo_Track", gimbalBar.transform, new Vector2(320f, 0f), new Vector2(140f, 8f), new Color(0.1f, 0.25f, 0.35f, 0.9f));
+        GameObject servoTick = CreateBox("Servo_Tick", servoTrack.transform, Vector2.zero, new Vector2(12f, 20f), cAmber);
         ctrl.servoTickIndicator = servoTick.GetComponent<RectTransform>();
 
-        // Propulsion & Sonar Telemetry Deck (780 x 145 at Y = -268)
-        GameObject driveDeck = CreatePanel("Drive_Telemetry_Deck", centerHUD.transform, new Vector2(0f, -268f), new Vector2(780f, 148f), cPanelBg);
+        // Propulsion, Live Joystick Scope & Sonar Telemetry Deck (820 x 154 at Y = -266)
+        GameObject driveDeck = CreatePanel("Drive_Telemetry_Deck", centerHUD.transform, new Vector2(0f, -266f), new Vector2(820f, 154f), cPanelBg);
         ctrl.themePanelBackgrounds.Add(driveDeck.GetComponent<Image>());
-        CreateBorder(driveDeck.transform, new Vector2(780f, 148f), cCyanDim, 1.5f);
+        CreateBorder(driveDeck.transform, new Vector2(820f, 154f), cCyanDim, 1.5f);
 
-        // Left Motor Track Column
+        // Live 2D Joystick Deflection Scope on Far Left of Drive Deck (-335, +6)
+        GameObject joyScope = CreatePanel("Joystick_Scope", driveDeck.transform, new Vector2(-335f, 10f), new Vector2(76f, 76f), cCardBg);
+        CreateBorder(joyScope.transform, new Vector2(76f, 76f), cCyan, 1.2f);
+        CreateBox("Joy_Cross_H", joyScope.transform, Vector2.zero, new Vector2(68f, 1f), cCyanDim);
+        CreateBox("Joy_Cross_V", joyScope.transform, Vector2.zero, new Vector2(1f, 68f), cCyanDim);
+        GameObject joyDot = CreateBox("Joystick_Dot", joyScope.transform, Vector2.zero, new Vector2(14f, 14f), cGreen);
+        ctrl.joystickDotIndicator = joyDot.GetComponent<RectTransform>();
+        CreateTMP("Joy_Lbl", driveDeck.transform, "L-STICK", new Vector2(-335f, -44f), new Vector2(90f, 22f), 12, cCyan, TextAlignmentOptions.Center, true);
+
+        // Left Motor Track Column (-185)
         ctrl.motorLeftText = CreateTMP("Motor_L_Txt", driveDeck.transform, "L-TRK +0",
-            new Vector2(-270f, 36f), new Vector2(200f, 32f), 20, cGreen, TextAlignmentOptions.Center, true);
-        ctrl.motorLeftBarFill = CreateProgressBar("Motor_L_Bar", driveDeck.transform, new Vector2(-270f, -2f), new Vector2(190f, 16f), cGreen, 0f);
-
-        // Center Speed Limit & FSM Mode Column
-        ctrl.speedPercentText = CreateTMP("Speed_Txt", driveDeck.transform, "SPEED LIMIT: 75% [-/=]",
-            new Vector2(0f, 42f), new Vector2(280f, 32f), 20, Color.white, TextAlignmentOptions.Center, true);
-        ctrl.speedBarFill = CreateProgressBar("Speed_Bar", driveDeck.transform, new Vector2(0f, 8f), new Vector2(250f, 16f), cCyan, 0.75f);
-        ctrl.fsmActionText = CreateTMP("FSM_Action_Txt", driveDeck.transform, "FSM: MANUAL TELEOP",
-            new Vector2(0f, -34f), new Vector2(280f, 28f), 16, cAmber, TextAlignmentOptions.Center, true);
-
-        // Right Motor Track Column
-        ctrl.motorRightText = CreateTMP("Motor_R_Txt", driveDeck.transform, "R-TRK +0",
-            new Vector2(270f, 36f), new Vector2(200f, 32f), 20, cGreen, TextAlignmentOptions.Center, true);
-        ctrl.motorRightBarFill = CreateProgressBar("Motor_R_Bar", driveDeck.transform, new Vector2(270f, -2f), new Vector2(190f, 16f), cGreen, 0f);
-
-        // Ultrasonic Sonar Status Strip inside Drive Deck
+            new Vector2(-185f, 36f), new Vector2(170f, 30f), 19, cGreen, TextAlignmentOptions.Center, true);
+        ctrl.motorLeftBarFill = CreateProgressBar("Motor_L_Bar", driveDeck.transform, new Vector2(-185f, 2f), new Vector2(165f, 15f), cGreen, 0f);
         ctrl.ultrasonicDistanceText = CreateTMP("Ultrasonic_Txt", driveDeck.transform, "SONAR: CLEAR",
-            new Vector2(-270f, -42f), new Vector2(220f, 28f), 17, cCyan, TextAlignmentOptions.Center, true);
-        CreateTMP("Drive_Hint_Txt", driveDeck.transform, "WASD / STICK: DRIVE   |   SPACE: E-STOP",
-            new Vector2(230f, -42f), new Vector2(280f, 28f), 13, cTextLight, TextAlignmentOptions.Center, false);
+            new Vector2(-185f, -38f), new Vector2(180f, 28f), 16, cCyan, TextAlignmentOptions.Center, true);
 
-        // Collision Proximity Alert Overlay Banner (Centered over Video Viewport, hidden when safe)
-        ctrl.obstacleAlertPanel = CreatePanel("Obstacle_Alert_Modal", centerHUD.transform, new Vector2(0f, 92f), new Vector2(680f, 96f), new Color(0.55f, 0.02f, 0.05f, 0.94f));
-        CreateBorder(ctrl.obstacleAlertPanel.transform, new Vector2(680f, 96f), cRed, 3f);
+        // Center Speed Limit & FSM Mode Column (+35)
+        ctrl.speedPercentText = CreateTMP("Speed_Txt", driveDeck.transform, "SPEED LIMIT: 75% [DPAD UP/DN]",
+            new Vector2(35f, 38f), new Vector2(260f, 30f), 17, Color.white, TextAlignmentOptions.Center, true);
+        ctrl.speedBarFill = CreateProgressBar("Speed_Bar", driveDeck.transform, new Vector2(35f, 4f), new Vector2(230f, 15f), cCyan, 0.75f);
+        ctrl.fsmActionText = CreateTMP("FSM_Action_Txt", driveDeck.transform, "MODE: JOYSTICK TELEOP",
+            new Vector2(35f, -38f), new Vector2(260f, 28f), 15, cAmber, TextAlignmentOptions.Center, true);
+
+        // Right Motor Track Column (+280)
+        ctrl.motorRightText = CreateTMP("Motor_R_Txt", driveDeck.transform, "R-TRK +0",
+            new Vector2(280f, 36f), new Vector2(170f, 30f), 19, cGreen, TextAlignmentOptions.Center, true);
+        ctrl.motorRightBarFill = CreateProgressBar("Motor_R_Bar", driveDeck.transform, new Vector2(280f, 2f), new Vector2(165f, 15f), cGreen, 0f);
+        CreateTMP("Drive_Hint_Txt", driveDeck.transform, "[Y]: รอบนอก/กล้อง  |  [B]: E-STOP",
+            new Vector2(280f, -38f), new Vector2(220f, 28f), 13, cTextLight, TextAlignmentOptions.Center, false);
+
+        // Collision Proximity Alert Overlay Banner (Hidden when safe)
+        ctrl.obstacleAlertPanel = CreatePanel("Obstacle_Alert_Modal", centerHUD.transform, new Vector2(0f, 210f), new Vector2(680f, 84f), new Color(0.55f, 0.02f, 0.05f, 0.94f));
+        CreateBorder(ctrl.obstacleAlertPanel.transform, new Vector2(680f, 84f), cRed, 3f);
         ctrl.obstacleDistanceText = CreateTMP("Alert_Label", ctrl.obstacleAlertPanel.transform,
             "⚠ PROXIMITY HAZARD — OBSTACLE AHEAD  |  AUTO-BRAKE",
-            Vector2.zero, new Vector2(650f, 80f), 22, Color.white, TextAlignmentOptions.Center, true);
+            Vector2.zero, new Vector2(650f, 70f), 21, Color.white, TextAlignmentOptions.Center, true);
         ctrl.obstacleAlertPanel.SetActive(false);
 
         // =========================================================================
@@ -334,7 +356,6 @@ public class HUDBuilderEditor : EditorWindow
         CreateTMP("Gyro_Title", gyroCard.transform, "IMU ARTIFICIAL HORIZON & GYRO",
             new Vector2(0f, 84f), new Vector2(364f, 24f), 14, cAmber, TextAlignmentOptions.Left, true);
 
-        // Masked Horizon Viewport on Left side of Card 1 (-95, -10)
         GameObject horizonMaskObj = CreatePanel("Horizon_Mask", gyroCard.transform, new Vector2(-95f, -12f), new Vector2(150f, 150f), new Color(0.02f, 0.14f, 0.24f, 1f));
         horizonMaskObj.AddComponent<RectMask2D>();
         CreateBorder(horizonMaskObj.transform, new Vector2(150f, 150f), cCyan, 1.5f);
@@ -345,14 +366,12 @@ public class HUDBuilderEditor : EditorWindow
         ctrl.imuHorizonBall.anchoredPosition = Vector2.zero;
         ctrl.imuHorizonBall.sizeDelta = new Vector2(220f, 220f);
 
-        // Sky & Ground halves inside Horizon Ball
         CreateBox("Sky_Half", ctrl.imuHorizonBall, new Vector2(0f, 55f), new Vector2(220f, 110f), new Color(0.04f, 0.28f, 0.48f, 0.85f));
         CreateBox("Ground_Half", ctrl.imuHorizonBall, new Vector2(0f, -55f), new Vector2(220f, 110f), new Color(0.28f, 0.18f, 0.08f, 0.85f));
         CreateBox("Horizon_Line", ctrl.imuHorizonBall, Vector2.zero, new Vector2(180f, 3f), cGreen);
         CreateBox("Pitch_Ladder_Up", ctrl.imuHorizonBall, new Vector2(0f, 24f), new Vector2(70f, 2f), Color.white);
         CreateBox("Pitch_Ladder_Dn", ctrl.imuHorizonBall, new Vector2(0f, -24f), new Vector2(70f, 2f), Color.white);
 
-        // Readouts on Right side of Card 1 (+85) — ZERO OVERLAP!
         ctrl.pitchText = CreateTMP("Pitch_Val", gyroCard.transform, "PITCH: +0.0°",
             new Vector2(92f, 32f), new Vector2(180f, 30f), 18, Color.white, TextAlignmentOptions.Left, true);
         ctrl.rollText = CreateTMP("Roll_Val", gyroCard.transform, "ROLL:  +0.0°",
@@ -375,15 +394,15 @@ public class HUDBuilderEditor : EditorWindow
         // --- CARD 3: HARDWARE, SERIAL & POWER TELEMETRY (388 x 255 at Y = -220) ---
         GameObject hwCard = CreatePanel("Card_Hardware", rightPanel.transform, new Vector2(0f, -220f), new Vector2(388f, 255f), cCardBg);
         CreateBorder(hwCard.transform, new Vector2(388f, 255f), cCyanDim, 1f);
-        CreateTMP("Hw_Title", hwCard.transform, "HARDWARE LINK & POWER BUS",
+        CreateTMP("Hw_Title", hwCard.transform, "HARDWARE LINK & JOYSTICK MAP",
             new Vector2(0f, 102f), new Vector2(364f, 24f), 14, cAmber, TextAlignmentOptions.Left, true);
 
         ctrl.hardwareHealthText = CreateTMP("Hardware_Health_Txt", hwCard.transform,
             "<b>ESP32 SERIAL:</b> /dev/ttyTHS1 [<color=#00FF88>LINKED</color>]\n" +
-            "<b>MOTOR BRIDGE:</b> <color=#00FF88>ONLINE</color>   |   <b>SONAR:</b> OK\n" +
-            "<b>UART FRAMES:</b> RX 100%  •  CRC ERR 0\n" +
-            "<b>AI ENGINE:</b> YOLOV8-TRT (8.5 FPS)",
-            new Vector2(0f, 18f), new Vector2(364f, 125f), 15, cTextLight, TextAlignmentOptions.Left, false);
+            "<b>L-STICK:</b> DRIVE   |   <b>R-STICK:</b> 360° LOOK & CAM\n" +
+            "<b>BTN [Y]:</b> รอบนอก/กล้อง  •  <b>[RB]:</b> 360°/220°/180°\n" +
+            "<b>BTN [LB]:</b> สลับหุ่นยนต์  •  <b>BTN [B]:</b> E-STOP",
+            new Vector2(0f, 18f), new Vector2(364f, 125f), 14, cTextLight, TextAlignmentOptions.Left, false);
 
         ctrl.healthText = ctrl.hardwareHealthText;
         ctrl.sensorListText = ctrl.hardwareHealthText;
@@ -401,18 +420,16 @@ public class HUDBuilderEditor : EditorWindow
         ctrl.themePanelBackgrounds.Add(bottomPanel.GetComponent<Image>());
         CreateBorder(bottomPanel.transform, new Vector2(1740f, 98f), cCyanDim, 1.5f);
 
-        // Deadman Status Pill on Left (-655, 0)
         GameObject deadmanPill = CreatePanel("Deadman_Pill", bottomPanel.transform, new Vector2(-655f, 0f), new Vector2(380f, 64f), cCardBg);
         CreateBorder(deadmanPill.transform, new Vector2(380f, 64f), cCyanDim, 1f);
         GameObject dmDot = CreateBox("Deadman_Dot", deadmanPill.transform, new Vector2(-164f, 0f), new Vector2(20f, 20f), cGreen);
         ctrl.deadmanIndicatorDot = dmDot.GetComponent<Image>();
         ctrl.deadmanStatusText = CreateTMP("Deadman_Txt", deadmanPill.transform,
-            "DRIVE READY (SEAMLESS WASD / STICK)",
+            "JOYSTICK READY (100% FULL CONTROL)",
             new Vector2(14f, 0f), new Vector2(325f, 52f), 15, Color.white, TextAlignmentOptions.Left, true);
 
-        // 8 Interactive Tactical Action Buttons across the deck
-        string[] btnCodes = { "BTN_SCAN", "BTN_BEACON", "BTN_CENTER", "BTN_APPROACH", "BTN_BACK", "BTN_VIEW", "BTN_CONFIG", "BTN_ESTOP" };
-        string[] btnTitles = { "SCAN AREA", "SOS BEACON", "CENTER CAM", "APPROACH", "BACK OUT", "VIEW [V]", "⚙ CONFIG", "🚨 E-STOP" };
+        string[] btnCodes = { "BTN_SCAN", "BTN_BEACON", "BTN_CENTER", "BTN_APPROACH", "BTN_EXT_CAM", "BTN_VIEW", "BTN_CONFIG", "BTN_ESTOP" };
+        string[] btnTitles = { "SCAN [A]", "BEACON [X]", "CENTER [R3]", "APPROACH", "🌐 รอบนอก/กล้อง [Y]", "360°/180° [RB]", "⚙ CONFIG", "🚨 E-STOP [B]" };
         float startX = -380f;
         float spacingX = 168f;
 
@@ -420,45 +437,46 @@ public class HUDBuilderEditor : EditorWindow
         {
             bool isEstop = (i == btnCodes.Length - 1);
             bool isCfg = (i == btnCodes.Length - 2);
+            bool isExtToggle = (i == 4);
             Color btnColor = isEstop
                 ? new Color(0.75f, 0.08f, 0.14f, 0.95f)
-                : (isCfg ? new Color(0.0f, 0.42f, 0.62f, 0.95f) : new Color(0.06f, 0.18f, 0.30f, 0.92f));
+                : (isExtToggle ? new Color(0.0f, 0.48f, 0.38f, 0.95f)
+                : (isCfg ? new Color(0.0f, 0.42f, 0.62f, 0.95f) : new Color(0.06f, 0.18f, 0.30f, 0.92f)));
 
             CreateButton(btnCodes[i], bottomPanel.transform, btnTitles[i],
-                new Vector2(startX + i * spacingX, 0f), new Vector2(154f, 62f), btnColor, 16);
+                new Vector2(startX + i * spacingX, 0f), new Vector2(154f, 62f), btnColor, 14);
         }
 
         // =========================================================================
-        // 6. INTERACTIVE IN-VR FRAMEWORK SETTINGS MODAL (920 x 620, Pop-up Drawer)
+        // 6. INTERACTIVE IN-VR FRAMEWORK SETTINGS MODAL (940 x 640, Pop-up Drawer)
         // =========================================================================
         GameObject modal = CreatePanel("Framework_Settings_Modal", hudRoot.transform, new Vector2(0f, 20f), new Vector2(940f, 640f), new Color(0.01f, 0.04f, 0.09f, 0.97f));
         RectTransform modalRt = modal.GetComponent<RectTransform>();
-        modalRt.localPosition = new Vector3(0f, 20f, -25f); // slightly closer to user for clean modal layering
+        modalRt.localPosition = new Vector3(0f, 20f, -25f);
         CreateBorder(modal.transform, new Vector2(940f, 640f), cCyan, 2.5f);
 
-        CreateTMP("Modal_Header", modal.transform, "⚙ V-RESQ FRAMEWORK CONTROL & ERGONOMICS CENTER",
+        CreateTMP("Modal_Header", modal.transform, "⚙ V-RESQ FRAMEWORK CONTROL & JOYSTICK CENTER",
             new Vector2(-40f, 280f), new Vector2(780f, 40f), 22, cCyan, TextAlignmentOptions.Left, true);
-        CreateButton("CFG_CLOSE", modal.transform, "✖ CLOSE [TAB]",
-            new Vector2(385f, 280f), new Vector2(130f, 40f), new Color(0.6f, 0.12f, 0.18f, 0.95f), 15);
+        CreateButton("CFG_CLOSE", modal.transform, "✖ CLOSE [START]",
+            new Vector2(385f, 280f), new Vector2(140f, 40f), new Color(0.6f, 0.12f, 0.18f, 0.95f), 14);
         CreateBox("Modal_Divider", modal.transform, new Vector2(0f, 252f), new Vector2(890f, 2f), cCyanDim);
 
-        // Live Config Summary Card
         GameObject summaryCard = CreatePanel("Summary_Card", modal.transform, new Vector2(0f, 165f), new Vector2(890f, 140f), cCardBg);
         CreateBorder(summaryCard.transform, new Vector2(890f, 140f), cCyanDim, 1f);
         ctrl.cfgSummaryText = CreateTMP("Cfg_Summary_Txt", summaryCard.transform,
-            "<b>SURROUND MODE:</b> Surround180   |   <b>CENTER VIEWPORT:</b> PIP + SURROUND\n" +
-            "<b>DOME RADIUS:</b> 2.8 m   |   <b>HUD DISTANCE:</b> 1.45 m   |   <b>WING ANGLE:</b> 24°\n" +
-            "<b>MAX SPEED LIMIT:</b> 75%   |   <b>DRIVE SAFETY:</b> IMMEDIATE DRIVE (SEAMLESS)",
+            "<b>ACTIVE VIEW:</b> SURROUND CAMERA 360° (ภาพจากกล้องรอบตัว)\n" +
+            "<b>JOYSTICK / CONTROLLER:</b> READY (100% FULL CONTROL)\n" +
+            "<b>SURROUND RADIUS:</b> 2.8 m   |   <b>HUD DISTANCE:</b> 1.45 m   |   <b>WING ANGLE:</b> 24°\n" +
+            "<b>MAX SPEED LIMIT:</b> 75%   |   <b>DRIVE MODE:</b> 100% IMMEDIATE JOYSTICK DRIVE",
             Vector2.zero, new Vector2(850f, 124f), 17, Color.white, TextAlignmentOptions.Left, false);
 
-        // Grid of Interactive Tuning Controls
         Color cBtnTune = new Color(0.05f, 0.22f, 0.36f, 0.95f);
         Color cBtnAct = new Color(0.0f, 0.48f, 0.38f, 0.95f);
 
-        // Row 1 (Y = +45): Display Mode, Center Viewport Mode, Color Theme
-        CreateButton("CFG_VIEW_CYCLE", modal.transform, "CYCLE SURROUND MODE (180°/220°/360°)", new Vector2(-295f, 45f), new Vector2(285f, 52f), cBtnTune, 14);
-        CreateButton("CFG_MONITOR_TOGGLE", modal.transform, "TOGGLE CENTER MONITOR IN DOME", new Vector2(0f, 45f), new Vector2(285f, 52f), cBtnTune, 14);
-        CreateButton("CFG_THEME_CYCLE", modal.transform, "SWITCH COCKPIT COLOR THEME", new Vector2(295f, 45f), new Vector2(285f, 52f), cBtnTune, 14);
+        // Row 1 (Y = +45): Instant External vs Camera Toggle, Cycle Surround Angle, Color Theme
+        CreateButton("CFG_EXT_TOGGLE", modal.transform, "🌐 สลับ มองเห็นรอบนอก ⇄ ภาพรอบตัว [Y]", new Vector2(-295f, 45f), new Vector2(285f, 52f), cBtnAct, 14);
+        CreateButton("CFG_VIEW_CYCLE", modal.transform, "🎥 เปลี่ยนมุมกล้องรอบตัว (360°/220°/180°)", new Vector2(0f, 45f), new Vector2(285f, 52f), cBtnTune, 14);
+        CreateButton("CFG_THEME_CYCLE", modal.transform, "🎨 เปลี่ยนโทนสี HUD (THEME)", new Vector2(295f, 45f), new Vector2(285f, 52f), cBtnTune, 14);
 
         // Row 2 (Y = -25): Surround Dome Radius (-/+), HUD Distance (-/+), Wing Curvature (-/+)
         CreateButton("CFG_RADIUS_MINUS", modal.transform, "DOME RADIUS -0.2m", new Vector2(-368f, -25f), new Vector2(140f, 50f), cBtnTune, 14);
@@ -478,18 +496,17 @@ public class HUDBuilderEditor : EditorWindow
         CreateButton("CFG_FAILOVER_TOGGLE", modal.transform, "TOGGLE MULTI-NODE FAILOVER", new Vector2(295f, -95f), new Vector2(285f, 50f), cBtnTune, 14);
 
         // Row 4 (Y = -175): Recenter HUD, Save JSON Profile, Reset Defaults
-        CreateButton("CFG_RECENTER", modal.transform, "🎯 RECENTER HUD TO EYES [R]", new Vector2(-295f, -175f), new Vector2(285f, 54f), cBtnAct, 15);
+        CreateButton("CFG_RECENTER", modal.transform, "🎯 RECENTER VIEW & HUD [SELECT/R]", new Vector2(-295f, -175f), new Vector2(285f, 54f), cBtnAct, 15);
         CreateButton("CFG_SAVE", modal.transform, "💾 SAVE PROFILE TO DISK", new Vector2(0f, -175f), new Vector2(285f, 54f), cBtnAct, 15);
         CreateButton("CFG_RESET", modal.transform, "↺ RESET DEFAULT PROFILE", new Vector2(295f, -175f), new Vector2(285f, 54f), new Color(0.45f, 0.22f, 0.1f, 0.95f), 15);
 
         CreateTMP("Modal_Footer", modal.transform,
-            "TIP: Use Unity Menu [V-ResQ -> Framework Control Center] in Editor or press [TAB] anytime in VR/Play Mode.",
-            new Vector2(0f, -265f), new Vector2(880f, 30f), 14, cCyan, TextAlignmentOptions.Center, false);
+            "JOYSTICK CONTROLS: [L-Stick] ขับหุ่นยนต์  |  [R-Stick] หันมองรอบตัว 360° & หันกล้อง  |  [Y] สลับมองรอบนอก/กล้องรอบตัว  |  [LB] สลับหุ่นยนต์",
+            new Vector2(0f, -265f), new Vector2(900f, 30f), 13, cCyan, TextAlignmentOptions.Center, false);
 
         ctrl.settingsModalRoot = modal;
         modal.SetActive(false);
 
-        // Wire buttons & save scene
         ctrl.WireAllInteractiveButtons();
         ctrl.ApplyFrameworkVisuals();
 
@@ -499,7 +516,66 @@ public class HUDBuilderEditor : EditorWindow
         EditorSceneManager.SaveScene(activeScene);
 
         Selection.activeGameObject = hudRoot;
-        Debug.Log("<color=cyan>[V-ResQ Framework]</color> Rebuilt clean Tactical VR Cockpit HUD and saved scene successfully!");
+        Debug.Log("<color=cyan>[V-ResQ Framework]</color> Rebuilt Open-Visor Surround HUD (No Flat Screen) + 100% Joystick Control and saved scene!");
+    }
+
+    /// <summary>
+    /// Creates a clean 3D tactical rescue ground grid & cardinal markers around (0,0,0)
+    /// so when the user switches to "มองเห็นรอบนอก (ExternalWorld)", they clearly see the 3D surroundings.
+    /// </summary>
+    private static void SetupExternal3DWorldEnvironment()
+    {
+        GameObject oldEnv = GameObject.Find("External_3D_World_Environment");
+        if (oldEnv != null) DestroyImmediate(oldEnv);
+
+        GameObject envRoot = new GameObject("External_3D_World_Environment");
+
+        Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+
+        // Tactical Floor Plane
+        GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
+        floor.name = "Tactical_Rescue_Floor";
+        floor.transform.SetParent(envRoot.transform, false);
+        floor.transform.position = new Vector3(0f, -0.05f, 0f);
+        floor.transform.localScale = new Vector3(4f, 1f, 4f);
+        Material floorMat = new Material(litShader);
+        floorMat.color = new Color(0.08f, 0.14f, 0.20f, 1f);
+        floor.GetComponent<Renderer>().sharedMaterial = floorMat;
+
+        // 4 Cardinal Direction Beacons around the user so 360° looking in ExternalWorld is super clear
+        Vector3[] positions = {
+            new Vector3(0f, 1.0f, 6.0f),   // North (+Z)
+            new Vector3(6.0f, 1.0f, 0f),   // East (+X)
+            new Vector3(0f, 1.0f, -6.0f),  // South (-Z)
+            new Vector3(-6.0f, 1.0f, 0f)   // West (-X)
+        };
+        Color[] colors = {
+            new Color(0f, 0.9f, 1f, 1f),
+            new Color(0f, 1f, 0.5f, 1f),
+            new Color(1f, 0.7f, 0.1f, 1f),
+            new Color(0.7f, 0.4f, 1f, 1f)
+        };
+        string[] names = { "Beacon_North_Front", "Beacon_East_Right", "Beacon_South_Rear", "Beacon_West_Left" };
+
+        for (int i = 0; i < 4; i++)
+        {
+            GameObject pillar = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            pillar.name = names[i];
+            pillar.transform.SetParent(envRoot.transform, false);
+            pillar.transform.position = positions[i];
+            pillar.transform.localScale = new Vector3(0.25f, 1.0f, 0.25f);
+            Material m = new Material(litShader);
+            m.color = colors[i];
+            pillar.GetComponent<Renderer>().sharedMaterial = m;
+        }
+    }
+
+    private static void CreateCornerBracket(Transform parent, Vector2 cornerPos, Vector2 dir, Color color)
+    {
+        float len = 28f;
+        float thick = 2.5f;
+        CreateBox("Bracket_H", parent, cornerPos + new Vector2(dir.x * len * 0.5f, 0f), new Vector2(len, thick), color);
+        CreateBox("Bracket_V", parent, cornerPos + new Vector2(0f, dir.y * len * 0.5f), new Vector2(thick, len), color);
     }
 
     // =========================================================================
@@ -510,8 +586,8 @@ public class HUDBuilderEditor : EditorWindow
         var cfg = Object.FindFirstObjectByType<VResqFrameworkConfig>();
         if (cfg == null)
         {
-            EditorGUILayout.HelpBox("No VResqFrameworkConfig found in the current scene. Click below to build the Tactical VR Cockpit HUD.", MessageType.Info);
-            if (GUILayout.Button("Build Full Tactical VR Cockpit HUD Now", GUILayout.Height(42)))
+            EditorGUILayout.HelpBox("No VResqFrameworkConfig found in the current scene. Click below to build the Open-Visor Surround HUD.", MessageType.Info);
+            if (GUILayout.Button("Build Open-Visor Surround HUD Now", GUILayout.Height(42)))
             {
                 RebuildSceneCleanly();
             }
@@ -524,11 +600,43 @@ public class HUDBuilderEditor : EditorWindow
         GUIStyle headerStyle = new GUIStyle(EditorStyles.boldLabel) { fontSize = 13 };
 
         EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("1. Swarm Fleet Endpoints (Node 0, Node 1, Node 2)", headerStyle);
+        EditorGUILayout.LabelField("1. Surround Camera vs. External World (ไม่มีจอกลางบังสายตา)", headerStyle);
+        EditorGUILayout.BeginVertical("box");
+        p.viewMode = (SurroundViewMode)EditorGUILayout.EnumPopup("Active View Mode", p.viewMode);
+        p.surroundRadius = EditorGUILayout.Slider("Surround Dome Radius (m)", p.surroundRadius, 1.6f, 5.0f);
+        p.surroundHeight = EditorGUILayout.Slider("Surround Dome Height (m)", p.surroundHeight, 1.4f, 4.5f);
+        p.surroundArcAngle = EditorGUILayout.Slider("Surround Arc Angle (°)", p.surroundArcAngle, 120f, 360f);
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("🌐 มองเห็นรอบนอก (External 3D World)", GUILayout.Height(28)))
+        {
+            var sur = Object.FindFirstObjectByType<VResqSurroundDisplay>();
+            if (sur != null) sur.SetViewMode(SurroundViewMode.ExternalWorld);
+        }
+        if (GUILayout.Button("🎥 ภาพกล้องรอบตัว 360° (Surround 360°)", GUILayout.Height(28)))
+        {
+            var sur = Object.FindFirstObjectByType<VResqSurroundDisplay>();
+            if (sur != null) sur.SetViewMode(SurroundViewMode.Surround360);
+        }
+        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.EndVertical();
+
+        EditorGUILayout.Space(6);
+        EditorGUILayout.LabelField("2. Joystick / Gamepad & Teleoperation (100% Controller)", headerStyle);
+        EditorGUILayout.BeginVertical("box");
+        p.enableJoystickControl = EditorGUILayout.Toggle("Enable Full Joystick Control", p.enableJoystickControl);
+        p.speedScale = EditorGUILayout.Slider("Default Speed Limit", p.speedScale, 0.2f, 1.0f);
+        p.stickDeadzone = EditorGUILayout.Slider("Joystick Deadzone", p.stickDeadzone, 0.02f, 0.30f);
+        p.lookYawSpeedDegPerSec = EditorGUILayout.Slider("360° Look Speed (°/s)", p.lookYawSpeedDegPerSec, 30f, 180f);
+        p.requireDeadmanSwitch = EditorGUILayout.Toggle("Require Deadman Hold", p.requireDeadmanSwitch);
+        p.collisionAlertCm = EditorGUILayout.Slider("Proximity Alert Distance (cm)", p.collisionAlertCm, 10f, 60f);
+        EditorGUILayout.EndVertical();
+
+        EditorGUILayout.Space(6);
+        EditorGUILayout.LabelField("3. Swarm Fleet Endpoints (Node 0, Node 1, Node 2)", headerStyle);
         EditorGUILayout.BeginVertical("box");
         p.defaultNodeIndex = EditorGUILayout.IntSlider("Default Active Node", p.defaultNodeIndex, 0, 2);
         p.autoFallbackToOnlineNode = EditorGUILayout.Toggle("Seamless Auto-Failover", p.autoFallbackToOnlineNode);
-        p.fleetProbeIntervalSec = EditorGUILayout.Slider("Health Probe Interval (s)", p.fleetProbeIntervalSec, 1.5f, 10f);
 
         if (p.fleetNodes != null)
         {
@@ -549,34 +657,14 @@ public class HUDBuilderEditor : EditorWindow
         EditorGUILayout.EndVertical();
 
         EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("2. Surround Panoramic Display (180° / 220° / 360°)", headerStyle);
-        EditorGUILayout.BeginVertical("box");
-        p.viewMode = (SurroundViewMode)EditorGUILayout.EnumPopup("Default View Mode", p.viewMode);
-        p.surroundRadius = EditorGUILayout.Slider("Surround Dome Radius (m)", p.surroundRadius, 1.6f, 5.0f);
-        p.surroundHeight = EditorGUILayout.Slider("Surround Dome Height (m)", p.surroundHeight, 1.4f, 4.5f);
-        p.surroundArcAngle = EditorGUILayout.Slider("Surround Arc Angle (°)", p.surroundArcAngle, 90f, 360f);
-        p.showCenterMonitorInSurround = EditorGUILayout.Toggle("Show Center PIP Monitor", p.showCenterMonitorInSurround);
-        p.centerMonitorOpacityInSurround = EditorGUILayout.Slider("Center Monitor Opacity", p.centerMonitorOpacityInSurround, 0.1f, 1.0f);
-        EditorGUILayout.EndVertical();
-
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("3. Cockpit UX/UI Ergonomics & Theme", headerStyle);
+        EditorGUILayout.LabelField("4. Cockpit UX/UI Ergonomics & Theme", headerStyle);
         EditorGUILayout.BeginVertical("box");
         p.theme = (CockpitTheme)EditorGUILayout.EnumPopup("Cockpit Color Theme", p.theme);
         p.hudDistance = EditorGUILayout.Slider("HUD Distance from Eyes (m)", p.hudDistance, 0.85f, 2.5f);
-        p.hudHeightOffset = EditorGUILayout.Slider("HUD Vertical Offset (m)", p.hudHeightOffset, -0.4f, 0.4f);
         p.wingPanelAngle = EditorGUILayout.Slider("Left/Right Wing Angle (°)", p.wingPanelAngle, 0f, 42f);
         p.panelOpacity = EditorGUILayout.Slider("Glass Panel Opacity", p.panelOpacity, 0.4f, 0.98f);
         p.smoothFollowHead = EditorGUILayout.Toggle("Smooth Follow Head Gaze", p.smoothFollowHead);
         p.followDeadzoneAngle = EditorGUILayout.Slider("Free-Look Deadzone (°)", p.followDeadzoneAngle, 10f, 180f);
-        EditorGUILayout.EndVertical();
-
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("4. Teleoperation & Safety", headerStyle);
-        EditorGUILayout.BeginVertical("box");
-        p.speedScale = EditorGUILayout.Slider("Default Speed Limit", p.speedScale, 0.2f, 1.0f);
-        p.requireDeadmanSwitch = EditorGUILayout.Toggle("Require Deadman Hold", p.requireDeadmanSwitch);
-        p.collisionAlertCm = EditorGUILayout.Slider("Proximity Alert Distance (cm)", p.collisionAlertCm, 10f, 60f);
         EditorGUILayout.EndVertical();
 
         EditorGUILayout.Space(10);
@@ -598,7 +686,7 @@ public class HUDBuilderEditor : EditorWindow
         }
         EditorGUILayout.EndHorizontal();
 
-        if (GUILayout.Button("🔄 Clean Rebuild Entire HUD Hierarchy & Save Scene", GUILayout.Height(38)))
+        if (GUILayout.Button("🔄 Clean Rebuild Open-Visor Surround HUD & Save Scene", GUILayout.Height(38)))
         {
             RebuildSceneCleanly();
         }

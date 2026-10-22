@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.IO;
 using System.Net;
 using System.Threading;
@@ -11,8 +10,8 @@ using VResQ.Core;
 namespace VResQ.Video
 {
     /// <summary>
-    /// High-performance MJPEG Camera Stream Receiver for Unity VR Cockpit.
-    /// Reads /video_feed from Jetson Nano and updates a Texture2D at 20-30 FPS.
+    /// High-performance MJPEG Camera Stream Receiver for V-ResQ 360°/180° Surround Display.
+    /// Reads /video_feed from the active robot node and updates a Texture2D at 20-30 FPS.
     /// Automatically switches stream when VResqClient switches robots.
     /// </summary>
     public class VResqCameraReceiver : MonoBehaviour
@@ -21,11 +20,8 @@ namespace VResQ.Video
         [Tooltip("Direct MJPEG Stream URL. If blank, auto-derived from VResqClient settings.")]
         public string streamUrl = "";
 
-        [Header("Target Displays")]
-        [Tooltip("Canvas RawImage to display the live video feed")]
+        [Header("Optional Target Displays")]
         public RawImage targetRawImage;
-
-        [Tooltip("Optional 3D Mesh Renderer (Quad or Curved Cockpit Display)")]
         public Renderer targetRenderer;
 
         [Header("Resolution")]
@@ -35,6 +31,9 @@ namespace VResQ.Video
         [Header("Diagnostics")]
         [SerializeField] private bool isStreaming = false;
         public bool IsStreaming => isStreaming;
+
+        [SerializeField] private bool hasReceivedLiveFrame = false;
+        public bool HasReceivedLiveFrame => hasReceivedLiveFrame;
 
         [SerializeField] private float currentFps = 0f;
         public float FPS => currentFps;
@@ -56,7 +55,8 @@ namespace VResQ.Video
         private void Start()
         {
             _videoTexture = new Texture2D(streamWidth, streamHeight, TextureFormat.RGB24, false);
-            FillPlaceholderTexture(_videoTexture, new Color32(10, 20, 35, 255));
+            _videoTexture.wrapMode = TextureWrapMode.Repeat;
+            GeneratePanoramicStandbyPattern(_videoTexture);
             ApplyTextureToTargets(_videoTexture);
 
             if (VResqClient.Instance != null)
@@ -68,17 +68,50 @@ namespace VResQ.Video
             StartStream();
         }
 
-        private void FillPlaceholderTexture(Texture2D tex, Color32 col)
+        /// <summary>
+        /// Generates a sleek 360° panoramic tactical grid & horizon standby texture before live camera frames arrive.
+        /// </summary>
+        private void GeneratePanoramicStandbyPattern(Texture2D tex)
         {
-            Color32[] pixels = new Color32[tex.width * tex.height];
-            for (int i = 0; i < pixels.Length; i++) pixels[i] = col;
+            int w = tex.width;
+            int h = tex.height;
+            Color32[] pixels = new Color32[w * h];
+            int horizonY = h / 2;
+
+            for (int y = 0; y < h; y++)
+            {
+                bool isGridY = (y % 40 == 0) || (Mathf.Abs(y - horizonY) <= 1);
+                for (int x = 0; x < w; x++)
+                {
+                    bool isGridX = (x % 40 == 0);
+                    if (Mathf.Abs(y - horizonY) <= 1)
+                    {
+                        pixels[y * w + x] = new Color32(0, 220, 255, 255);
+                    }
+                    else if (isGridX || isGridY)
+                    {
+                        pixels[y * w + x] = new Color32(0, 95, 135, 255);
+                    }
+                    else if (y > horizonY)
+                    {
+                        byte grad = (byte)Mathf.Clamp(16 + ((y - horizonY) * 24 / (h / 2)), 12, 48);
+                        pixels[y * w + x] = new Color32(6, (byte)(grad + 8), (byte)(grad + 24), 255);
+                    }
+                    else
+                    {
+                        byte grad = (byte)Mathf.Clamp(12 + ((horizonY - y) * 18 / (h / 2)), 10, 36);
+                        pixels[y * w + x] = new Color32(8, grad, (byte)(grad + 14), 255);
+                    }
+                }
+            }
             tex.SetPixels32(pixels);
             tex.Apply();
         }
 
         private void OnRobotSwitched(string newIp)
         {
-            Debug.Log($"<color=cyan>[CameraReceiver]</color> Switching camera stream to {newIp}...");
+            Debug.Log($"<color=cyan>[CameraReceiver]</color> Switching surround camera stream to {newIp}...");
+            hasReceivedLiveFrame = false;
             StopStream();
             UpdateStreamUrl();
             StartStream();
@@ -93,14 +126,11 @@ namespace VResQ.Video
 
         private void Update()
         {
-            // Auto bind texture if assigned dynamically
             if (targetRawImage != null && targetRawImage.texture != _videoTexture)
             {
                 targetRawImage.texture = _videoTexture;
-                targetRawImage.color = Color.white;
             }
 
-            // FPS Calculation
             _fpsTimer += Time.deltaTime;
             if (_fpsTimer >= 1.0f)
             {
@@ -109,7 +139,6 @@ namespace VResQ.Video
                 _fpsTimer = 0f;
             }
 
-            // Consume decoded frame onto Texture2D on Unity main thread
             byte[] frameToLoad = null;
             lock (_frameLock)
             {
@@ -123,6 +152,7 @@ namespace VResQ.Video
             if (frameToLoad != null)
             {
                 _videoTexture.LoadImage(frameToLoad);
+                hasReceivedLiveFrame = true;
                 _fpsCounter++;
                 framesReceived++;
             }
@@ -166,9 +196,10 @@ namespace VResQ.Video
 
                 try
                 {
+                    UpdateStreamUrl();
                     request = (HttpWebRequest)WebRequest.Create(streamUrl);
-                    request.Timeout = 4000;
-                    request.ReadWriteTimeout = 5000;
+                    request.Timeout = 3500;
+                    request.ReadWriteTimeout = 4500;
 
                     using (token.Register(() => request.Abort()))
                     {
@@ -187,7 +218,6 @@ namespace VResQ.Video
                             ms.Write(buffer, 0, bytesRead);
                             byte[] data = ms.ToArray();
 
-                            // Locate JPEG delimiters: SOI (0xFF, 0xD8) and EOI (0xFF, 0xD9)
                             int soi = FindBytes(data, new byte[] { 0xFF, 0xD8 }, 0);
                             if (soi >= 0)
                             {
@@ -204,7 +234,6 @@ namespace VResQ.Video
                                         _hasNewFrame = true;
                                     }
 
-                                    // Retain leftover bytes
                                     int remaining = data.Length - (eoi + 2);
                                     ms.SetLength(0);
                                     if (remaining > 0)
@@ -216,7 +245,7 @@ namespace VResQ.Video
 
                             if (ms.Length > 2000000)
                             {
-                                ms.SetLength(0); // Protect against runaway memory
+                                ms.SetLength(0);
                             }
                         }
                     }
@@ -227,8 +256,7 @@ namespace VResQ.Video
                 }
                 catch (Exception)
                 {
-                    // If stream fails, wait briefly before reconnecting
-                    await Task.Delay(2000, token);
+                    await Task.Delay(1800, token);
                 }
                 finally
                 {

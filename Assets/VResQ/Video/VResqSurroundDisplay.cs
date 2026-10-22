@@ -5,43 +5,58 @@ using VResQ.Core;
 
 namespace VResQ.Video
 {
+    /// <summary>
+    /// Surround View Modes:
+    /// - ExternalWorld (มองเห็นรอบนอก): See-through 3D environment all around the user.
+    /// - Surround360 (ภาพจากกล้องรอบตัว 360°): Full 360° panoramic cylinder/sphere camera wrap.
+    /// - Surround220 (ภาพจากกล้องรอบตัว 220°): Ultra-wide 220° curved surround camera wrap.
+    /// - Surround180 (ภาพจากกล้องรอบตัว 180°): Front hemisphere 180° curved surround camera wrap.
+    /// </summary>
     public enum SurroundViewMode
     {
-        Surround180 = 0,
-        Surround220 = 1,
-        Dome360 = 2,
-        CenterPanelOnly = 3
+        ExternalWorld = 0,
+        Surround360 = 1,
+        Surround220 = 2,
+        Surround180 = 3,
+
+        // Legacy compatibility aliases
+        CenterPanelOnly = ExternalWorld,
+        Dome360 = Surround360
     }
 
     /// <summary>
-    /// Generates and manages a procedural Curved Panoramic Surround Screen wrapping around the VR User.
-    /// Maps the live Jetson MJPEG camera stream directly onto this immersive display.
-    /// Synchronized with VResqFrameworkConfig for live runtime and Inspector customization.
+    /// Generates and manages a 3D Panoramic Surround Camera Dome wrapping around the user.
+    /// Supports instant switching between seeing the outside 3D world (ExternalWorld / มองเห็นรอบนอก)
+    /// and full surround camera immersion (Surround360 / 220 / 180 / ภาพจากกล้องรอบตัว) with NO flat monitor box.
     /// </summary>
+    [ExecuteAlways]
     [RequireComponent(typeof(VResqCameraReceiver))]
     public class VResqSurroundDisplay : MonoBehaviour
     {
         public static VResqSurroundDisplay Instance { get; private set; }
 
-        [Header("--- Surround Screen Dimensions ---")]
-        [Tooltip("Distance from user eyes to the curved screen (meters)")]
+        [Header("--- Surround Camera Dome Dimensions ---")]
+        [Tooltip("Distance from user eyes to the surround camera dome (meters)")]
         [Range(1.5f, 6.0f)] public float radius = 2.8f;
 
-        [Tooltip("Total height of the curved screen (meters)")]
-        [Range(1.0f, 5.0f)] public float screenHeight = 2.5f;
+        [Tooltip("Total height of the surround camera dome (meters)")]
+        [Range(1.2f, 5.0f)] public float screenHeight = 2.8f;
 
-        [Tooltip("Vertical height offset relative to camera/cockpit")]
+        [Tooltip("Vertical height offset relative to camera")]
         public float heightOffset = 0.0f;
 
-        [Tooltip("Horizontal Field of View arc (degrees). 180 = half cylinder, 360 = full cylinder")]
-        [Range(60f, 360f)] public float arcAngle = 180f;
+        [Tooltip("Horizontal Field of View arc (degrees): 360 = full wrap, 220 = ultra-wide, 180 = hemisphere")]
+        [Range(90f, 360f)] public float arcAngle = 360f;
 
         [Header("--- Mesh Resolution ---")]
-        [Range(16, 96)] public int horizontalSegments = 56;
-        [Range(4, 24)] public int verticalSegments = 14;
+        [Range(24, 96)] public int horizontalSegments = 64;
+        [Range(6, 24)] public int verticalSegments = 16;
 
-        [Header("--- View Mode ---")]
-        public SurroundViewMode currentViewMode = SurroundViewMode.Surround180;
+        [Header("--- Active View Mode ---")]
+        public SurroundViewMode currentViewMode = SurroundViewMode.Surround360;
+
+        [Header("--- Last Active Camera Mode (for 1-button toggle) ---")]
+        public SurroundViewMode lastCameraSurroundMode = SurroundViewMode.Surround360;
 
         [Header("--- Material & Shader ---")]
         public Material surroundMaterial;
@@ -56,13 +71,14 @@ namespace VResQ.Video
         private VResqCameraReceiver _cameraReceiver;
         private Material _runtimeMaterial;
 
+        private void OnEnable()
+        {
+            Instance = this;
+            _cameraReceiver = GetComponent<VResqCameraReceiver>();
+        }
+
         private void Awake()
         {
-            if (Instance != null && Instance != this)
-            {
-                Destroy(gameObject);
-                return;
-            }
             Instance = this;
             _cameraReceiver = GetComponent<VResqCameraReceiver>();
         }
@@ -99,14 +115,14 @@ namespace VResQ.Video
 
         private void SetupSurroundScreen()
         {
-            if (_screenObject != null) return;
+            if (_screenObject != null && _meshFilter != null && _meshRenderer != null) return;
 
             Transform existing = transform.Find("Curved_Surround_Screen");
             if (existing != null)
             {
                 _screenObject = existing.gameObject;
-                _meshFilter = _screenObject.GetComponent<MeshFilter>();
-                _meshRenderer = _screenObject.GetComponent<MeshRenderer>();
+                _meshFilter = _screenObject.GetComponent<MeshFilter>() ?? _screenObject.AddComponent<MeshFilter>();
+                _meshRenderer = _screenObject.GetComponent<MeshRenderer>() ?? _screenObject.AddComponent<MeshRenderer>();
             }
             else
             {
@@ -128,7 +144,7 @@ namespace VResQ.Video
                 _runtimeMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
             }
 
-            _meshRenderer.material = _runtimeMaterial;
+            _meshRenderer.sharedMaterial = _runtimeMaterial;
             _meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _meshRenderer.receiveShadows = false;
 
@@ -137,8 +153,6 @@ namespace VResQ.Video
 
         private void Update()
         {
-            HandleViewModeInput();
-
             if (targetCamera == null && Camera.main != null)
             {
                 targetCamera = Camera.main.transform;
@@ -150,15 +164,11 @@ namespace VResQ.Video
                 camPos.y += heightOffset;
                 _screenObject.transform.position = camPos;
 
-                Vector3 forward = targetCamera.forward;
-                forward.y = 0;
-                if (forward.sqrMagnitude > 0.001f)
-                {
-                    _screenObject.transform.rotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
-                }
+                // Keep the surround dome aligned with robot/world forward so the user can look 360° around inside it!
+                _screenObject.transform.rotation = Quaternion.identity;
             }
 
-            if (_cameraReceiver != null && _cameraReceiver.VideoTexture != null && _runtimeMaterial != null)
+            if (Application.isPlaying && _cameraReceiver != null && _cameraReceiver.VideoTexture != null && _runtimeMaterial != null)
             {
                 if (_runtimeMaterial.mainTexture != _cameraReceiver.VideoTexture)
                 {
@@ -171,56 +181,58 @@ namespace VResQ.Video
             }
         }
 
-        private void HandleViewModeInput()
+        /// <summary>
+        /// Instant 1-button toggle between มองเห็นรอบนอก (ExternalWorld) and ภาพจากกล้องรอบตัว (Surround Camera).
+        /// </summary>
+        public void ToggleExternalVsCamera()
         {
-            bool toggleRequested = false;
-
-            Keyboard kb = Keyboard.current;
-            if (kb != null && kb.vKey.wasPressedThisFrame)
+            if (currentViewMode == SurroundViewMode.ExternalWorld)
             {
-                toggleRequested = true;
+                if (lastCameraSurroundMode == SurroundViewMode.ExternalWorld)
+                    lastCameraSurroundMode = SurroundViewMode.Surround360;
+                SetViewMode(lastCameraSurroundMode);
             }
-
-            Gamepad gp = Gamepad.current;
-            if (gp != null && gp.buttonNorth.wasPressedThisFrame)
+            else
             {
-                toggleRequested = true;
-            }
-
-            try
-            {
-                if (UnityEngine.Input.GetKeyDown(KeyCode.V))
-                {
-                    toggleRequested = true;
-                }
-            }
-            catch (InvalidOperationException) { }
-
-            if (toggleRequested)
-            {
-                CycleNextViewMode();
+                lastCameraSurroundMode = currentViewMode;
+                SetViewMode(SurroundViewMode.ExternalWorld);
             }
         }
 
+        /// <summary>
+        /// Cycles through all 4 modes: Surround360 -> Surround220 -> Surround180 -> ExternalWorld (มองเห็นรอบนอก).
+        /// </summary>
         public void CycleNextViewMode()
         {
-            int next = ((int)currentViewMode + 1) % 4;
-            SetViewMode((SurroundViewMode)next);
+            SurroundViewMode next = currentViewMode switch
+            {
+                SurroundViewMode.Surround360 => SurroundViewMode.Surround220,
+                SurroundViewMode.Surround220 => SurroundViewMode.Surround180,
+                SurroundViewMode.Surround180 => SurroundViewMode.ExternalWorld,
+                SurroundViewMode.ExternalWorld => SurroundViewMode.Surround360,
+                _ => SurroundViewMode.Surround360
+            };
+            SetViewMode(next);
         }
 
         public void SetViewMode(SurroundViewMode mode)
         {
             currentViewMode = mode;
+            if (mode != SurroundViewMode.ExternalWorld)
+            {
+                lastCameraSurroundMode = mode;
+            }
+
             switch (mode)
             {
-                case SurroundViewMode.Surround180:
-                    arcAngle = 180f;
+                case SurroundViewMode.Surround360:
+                    arcAngle = 360f;
                     break;
                 case SurroundViewMode.Surround220:
                     arcAngle = 220f;
                     break;
-                case SurroundViewMode.Dome360:
-                    arcAngle = 360f;
+                case SurroundViewMode.Surround180:
+                    arcAngle = 180f;
                     break;
             }
 
@@ -228,7 +240,7 @@ namespace VResQ.Video
             if (cfg != null)
             {
                 cfg.Profile.viewMode = currentViewMode;
-                if (mode != SurroundViewMode.CenterPanelOnly)
+                if (mode != SurroundViewMode.ExternalWorld)
                 {
                     cfg.Profile.surroundArcAngle = arcAngle;
                 }
@@ -238,6 +250,8 @@ namespace VResQ.Video
             {
                 ApplyGeometryAndMode();
             }
+
+            Debug.Log($"<color=cyan>[SurroundDisplay]</color> View Mode -> {currentViewMode} ({arcAngle}°)");
         }
 
         public void ApplyGeometryAndMode()
@@ -245,12 +259,14 @@ namespace VResQ.Video
             if (_screenObject == null) SetupSurroundScreen();
             if (_screenObject == null) return;
 
-            if (currentViewMode == SurroundViewMode.CenterPanelOnly)
+            if (currentViewMode == SurroundViewMode.ExternalWorld)
             {
+                // มองเห็นรอบนอก (See-through 3D external world)
                 _screenObject.SetActive(false);
             }
             else
             {
+                // ภาพจากกล้องรอบตัว (Surround Camera 360° / 220° / 180°)
                 _screenObject.SetActive(true);
                 GenerateCurvedMesh(arcAngle, radius, screenHeight);
             }
@@ -270,8 +286,8 @@ namespace VResQ.Video
                 _screenMesh.Clear();
             }
 
-            int hCount = Mathf.Max(8, horizontalSegments);
-            int vCount = Mathf.Max(2, verticalSegments);
+            int hCount = Mathf.Max(16, horizontalSegments);
+            int vCount = Mathf.Max(4, verticalSegments);
 
             int vertexCount = (hCount + 1) * (vCount + 1);
             Vector3[] vertices = new Vector3[vertexCount];
@@ -297,10 +313,14 @@ namespace VResQ.Video
                     float currentAngleRad = startAngleRad + (x * angleStepRad);
                     float u = (float)x / hCount;
 
+                    // Slight spherical vertical curvature for natural surround immersion
+                    float vNorm = (v - 0.5f) * 2f; // -1 to +1
+                    float sphericalRadius = r * Mathf.Lerp(1.0f, 0.92f, vNorm * vNorm);
+
                     float sin = Mathf.Sin(currentAngleRad);
                     float cos = Mathf.Cos(currentAngleRad);
 
-                    Vector3 pos = new Vector3(sin * r, currentY, cos * r);
+                    Vector3 pos = new Vector3(sin * sphericalRadius, currentY, cos * sphericalRadius);
                     vertices[vIdx] = pos;
                     normals[vIdx] = -new Vector3(sin, 0f, cos).normalized;
                     uvs[vIdx] = new Vector2(u, v);
@@ -337,8 +357,11 @@ namespace VResQ.Video
 
         private void OnDestroy()
         {
-            if (_runtimeMaterial != null) Destroy(_runtimeMaterial);
-            if (_screenMesh != null) Destroy(_screenMesh);
+            if (Application.isPlaying)
+            {
+                if (_runtimeMaterial != null) Destroy(_runtimeMaterial);
+                if (_screenMesh != null) Destroy(_screenMesh);
+            }
         }
     }
 }

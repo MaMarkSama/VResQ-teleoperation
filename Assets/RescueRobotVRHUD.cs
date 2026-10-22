@@ -8,9 +8,9 @@ using VResQ.Video;
 using VResQ.Control;
 
 /// <summary>
-/// Master Tactical VR HUD & Framework UI Controller for V-ResQ Rescue Operations.
-/// Manages 180°/220°/360° Surround Display, Non-Overlapping Telemetry Cards,
-/// Interactive Swarm Node Switcher, AI Detection Bounding Boxes, and In-VR Framework Settings Modal.
+/// Master Open-Visor Tactical VR HUD & Framework UI Controller for V-ResQ Rescue Operations.
+/// Designed for 100% Joystick/Gamepad control and Open Surround Vision (NO flat monitor screen blocking center view).
+/// Seamlessly switches between External 3D World (มองเห็นรอบนอก) and 360°/220°/180° Surround Camera (ภาพจากกล้องรอบตัว).
 /// </summary>
 public class RescueRobotVRHUD : MonoBehaviour
 {
@@ -21,11 +21,13 @@ public class RescueRobotVRHUD : MonoBehaviour
     public TextMeshProUGUI aiStatusBadgeText;
     public TextMeshProUGUI clockText;
 
-    [Header("--- Center HUD Viewport ---")]
-    public RawImage centerVideoScreen;
+    [Header("--- Open Center Visor & Propulsion Deck ---")]
+    public RawImage centerVideoScreen; // Kept null by default (no flat screen in center)
     public RectTransform aiBboxContainer;
     public TextMeshProUGUI videoOverlayText;
     public TextMeshProUGUI compassHeadingText;
+    public TextMeshProUGUI controllerStatusText;
+    public RectTransform joystickDotIndicator;
     public TextMeshProUGUI speedPercentText;
     public Image speedBarFill;
     public TextMeshProUGUI motorLeftText;
@@ -100,9 +102,10 @@ public class RescueRobotVRHUD : MonoBehaviour
         _teleop = GetComponent<VResqTeleopController>() ?? gameObject.AddComponent<VResqTeleopController>();
         surroundDisplay = GetComponent<VResqSurroundDisplay>() ?? gameObject.AddComponent<VResqSurroundDisplay>();
 
-        if (_cameraReceiver != null && centerVideoScreen != null)
+        // Do NOT bind a flat center screen; video goes strictly to the 3D Surround Dome!
+        if (_cameraReceiver != null)
         {
-            _cameraReceiver.targetRawImage = centerVideoScreen;
+            _cameraReceiver.targetRawImage = null;
         }
 
         WireAllInteractiveButtons();
@@ -153,16 +156,17 @@ public class RescueRobotVRHUD : MonoBehaviour
             else if (n.Contains("BTN_NODE_2")) b.onClick.AddListener(() => SelectFleetNode(2));
             else if (n.Contains("BTN_SCAN")) b.onClick.AddListener(() => _teleop?.ActionScan());
             else if (n.Contains("BTN_BEACON")) b.onClick.AddListener(() => _teleop?.ActionBeacon());
-            else if (n.Contains("BTN_CENTER")) b.onClick.AddListener(() => _teleop?.ActionCenter());
+            else if (n.Contains("BTN_CENTER")) b.onClick.AddListener(() => { _teleop?.ActionCenter(); _teleop?.ResetLookOrientation(); });
             else if (n.Contains("BTN_APPROACH")) b.onClick.AddListener(() => _teleop?.ActionApproach());
             else if (n.Contains("BTN_BACK")) b.onClick.AddListener(() => _teleop?.ActionBackOut());
+            else if (n.Contains("BTN_EXT_CAM")) b.onClick.AddListener(() => surroundDisplay?.ToggleExternalVsCamera());
             else if (n.Contains("BTN_VIEW") || n.Contains("BTN_SURROUND")) b.onClick.AddListener(() => surroundDisplay?.CycleNextViewMode());
             else if (n.Contains("BTN_CONFIG") || n.Contains("BTN_SETTINGS")) b.onClick.AddListener(ToggleSettingsModal);
             else if (n.Contains("BTN_ESTOP") || n.Contains("BTN_STOP")) b.onClick.AddListener(() => _teleop?.ActionEmergencyStop());
             // Framework Settings Modal Controls
             else if (n.Contains("CFG_CLOSE")) b.onClick.AddListener(ToggleSettingsModal);
             else if (n.Contains("CFG_VIEW_CYCLE")) b.onClick.AddListener(() => { surroundDisplay?.CycleNextViewMode(); RefreshConfigModalText(); });
-            else if (n.Contains("CFG_MONITOR_TOGGLE")) b.onClick.AddListener(ToggleCenterMonitorMode);
+            else if (n.Contains("CFG_EXT_TOGGLE")) b.onClick.AddListener(() => { surroundDisplay?.ToggleExternalVsCamera(); RefreshConfigModalText(); });
             else if (n.Contains("CFG_RADIUS_MINUS")) b.onClick.AddListener(() => AdjustSurroundRadius(-0.2f));
             else if (n.Contains("CFG_RADIUS_PLUS")) b.onClick.AddListener(() => AdjustSurroundRadius(+0.2f));
             else if (n.Contains("CFG_HUDDIST_MINUS")) b.onClick.AddListener(() => AdjustHudDistance(-0.1f));
@@ -174,7 +178,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             else if (n.Contains("CFG_DEADMAN_TOGGLE")) b.onClick.AddListener(ToggleDeadmanRequirement);
             else if (n.Contains("CFG_FAILOVER_TOGGLE")) b.onClick.AddListener(ToggleAutoFailover);
             else if (n.Contains("CFG_THEME_CYCLE")) b.onClick.AddListener(CycleCockpitTheme);
-            else if (n.Contains("CFG_RECENTER")) b.onClick.AddListener(() => GetComponent<TacticalHUDFollow>()?.ResetHUDOrientation());
+            else if (n.Contains("CFG_RECENTER")) b.onClick.AddListener(() => _teleop?.ResetLookOrientation());
             else if (n.Contains("CFG_SAVE")) b.onClick.AddListener(() => { _config?.SaveProfile(); RefreshConfigModalText(); });
             else if (n.Contains("CFG_RESET")) b.onClick.AddListener(() => { _config?.ResetToDefaults(); RefreshConfigModalText(); });
         }
@@ -192,13 +196,6 @@ public class RescueRobotVRHUD : MonoBehaviour
         bool nextState = !settingsModalRoot.activeSelf;
         settingsModalRoot.SetActive(nextState);
         if (nextState) RefreshConfigModalText();
-    }
-
-    private void ToggleCenterMonitorMode()
-    {
-        if (_config == null) return;
-        _config.Profile.showCenterMonitorInSurround = !_config.Profile.showCenterMonitorInSurround;
-        _config.NotifyConfigChanged();
     }
 
     private void AdjustSurroundRadius(float delta)
@@ -251,7 +248,6 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         var p = _config.Profile;
 
-        // 1. Wing Panel Ergonomic Curvature
         if (leftPanelRect != null)
         {
             leftPanelRect.localEulerAngles = new Vector3(0f, -p.wingPanelAngle, 0f);
@@ -261,25 +257,6 @@ public class RescueRobotVRHUD : MonoBehaviour
             rightPanelRect.localEulerAngles = new Vector3(0f, p.wingPanelAngle, 0f);
         }
 
-        // 2. Center Monitor Opacity in Surround Mode vs Flat Mode
-        if (centerVideoScreen != null)
-        {
-            bool isSurround = p.viewMode != SurroundViewMode.CenterPanelOnly;
-            if (isSurround && !p.showCenterMonitorInSurround)
-            {
-                centerVideoScreen.color = new Color(1f, 1f, 1f, 0.06f);
-            }
-            else if (isSurround)
-            {
-                centerVideoScreen.color = new Color(1f, 1f, 1f, p.centerMonitorOpacityInSurround);
-            }
-            else
-            {
-                centerVideoScreen.color = Color.white;
-            }
-        }
-
-        // 3. Apply Theme Colors
         Color primary = _config.GetPrimaryThemeColor();
         Color panelBg = _config.GetPanelBackgroundColor();
 
@@ -300,16 +277,17 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         if (cfgSummaryText == null || _config == null) return;
         var p = _config.Profile;
-        string monitorMode = p.showCenterMonitorInSurround ? "PIP + SURROUND" : "TRANSPARENT HUD ONLY";
-        string deadmanMode = p.requireDeadmanSwitch ? "REQUIRE HOLD (SHIFT/GRIP)" : "IMMEDIATE DRIVE (SEAMLESS)";
-        string failoverMode = p.autoFallbackToOnlineNode ? "ENABLED (AUTO-SWITCH)" : "MANUAL ONLY";
+        string viewDesc = p.viewMode == SurroundViewMode.ExternalWorld
+            ? "EXTERNAL 3D WORLD (มองเห็นรอบนอก)"
+            : $"SURROUND CAMERA {p.surroundArcAngle:F0}° (ภาพจากกล้องรอบตัว)";
+        string deadmanMode = p.requireDeadmanSwitch ? "HOLD TRIGGER/SHIFT" : "100% IMMEDIATE JOYSTICK DRIVE";
+        string ctrlName = _teleop != null ? _teleop.ActiveControllerName : "READY";
 
         cfgSummaryText.text =
-            $"<b>SURROUND MODE:</b> <color=#00F0FF>{p.viewMode}</color>   |   <b>CENTER VIEWPORT:</b> <color=#00FFAA>{monitorMode}</color>\n" +
-            $"<b>DOME RADIUS:</b> {p.surroundRadius:F1} m   |   <b>DOME ARC:</b> {p.surroundArcAngle:F0}°   |   <b>HUD DISTANCE:</b> {p.hudDistance:F2} m\n" +
-            $"<b>WING CURVE ANGLE:</b> {p.wingPanelAngle:F0}°   |   <b>THEME:</b> <color=#FFD166>{p.theme}</color>\n" +
-            $"<b>MAX SPEED LIMIT:</b> {p.speedScale * 100f:F0}%   |   <b>DRIVE SAFETY:</b> <color=#00FFAA>{deadmanMode}</color>\n" +
-            $"<b>MULTI-NODE AUTO-FAILOVER:</b> {failoverMode}";
+            $"<b>ACTIVE VIEW:</b> <color=#00F0FF>{viewDesc}</color>\n" +
+            $"<b>JOYSTICK / CONTROLLER:</b> <color=#00FF88>{ctrlName}</color>\n" +
+            $"<b>SURROUND RADIUS:</b> {p.surroundRadius:F1} m   |   <b>HUD DISTANCE:</b> {p.hudDistance:F2} m   |   <b>WING ANGLE:</b> {p.wingPanelAngle:F0}°\n" +
+            $"<b>MAX SPEED LIMIT:</b> {p.speedScale * 100f:F0}%   |   <b>DRIVE MODE:</b> <color=#00FFAA>{deadmanMode}</color>";
     }
 
     public void RefreshFleetNodeCards()
@@ -354,44 +332,61 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (clockText != null)
             clockText.text = DateTime.Now.ToString("HH:mm:ss");
 
+        // 1. Update Surround vs External World Badge
         if (viewModeBadgeText != null && surroundDisplay != null)
         {
             viewModeBadgeText.text = surroundDisplay.currentViewMode switch
             {
-                SurroundViewMode.Surround180 => "VIEW: 180° DOME [V]",
-                SurroundViewMode.Surround220 => "VIEW: 220° PANORAMA [V]",
-                SurroundViewMode.Dome360 => "VIEW: 360° FULL SPHERE [V]",
-                SurroundViewMode.CenterPanelOnly => "VIEW: COCKPIT MONITOR [V]",
-                _ => "VIEW: SURROUND [V]"
+                SurroundViewMode.ExternalWorld => "🌐 VIEW: EXTERNAL WORLD (มองรอบนอก) [Y/F]",
+                SurroundViewMode.Surround360 => "🎥 VIEW: 360° SURROUND CAM (ภาพรอบตัว) [Y/V]",
+                SurroundViewMode.Surround220 => "🎥 VIEW: 220° PANORAMA CAM (ภาพรอบตัว) [Y/V]",
+                SurroundViewMode.Surround180 => "🎥 VIEW: 180° DOME CAM (ภาพรอบตัว) [Y/V]",
+                _ => "🎥 VIEW: SURROUND CAM [Y/V]"
             };
         }
 
+        // 2. Live Joystick / Controller Status & 2D Stick Scope
+        if (_teleop != null)
+        {
+            if (controllerStatusText != null)
+            {
+                Vector2 st = _teleop.LiveDriveStick;
+                string joyIcon = _teleop.HasPhysicalJoystick ? "🎮 JOYSTICK ACTIVE:" : "⌨ INPUT ACTIVE:";
+                controllerStatusText.text = $"{joyIcon} {_teleop.ActiveControllerName}   |   STICK X:{st.x:+0.00;-0.00}  Y:{st.y:+0.00;-0.00}";
+                controllerStatusText.color = _teleop.HasPhysicalJoystick ? new Color(0f, 1f, 0.55f, 1f) : new Color(0.6f, 0.92f, 1f, 1f);
+            }
+
+            if (joystickDotIndicator != null)
+            {
+                Vector2 st = _teleop.LiveDriveStick;
+                joystickDotIndicator.anchoredPosition = new Vector2(st.x * 26f, st.y * 26f);
+            }
+        }
+
+        // 3. Deadman Status
         bool isDeadman = (_teleop == null || _teleop.IsDeadmanActive);
         if (deadmanStatusText != null)
         {
             bool reqHold = _config != null && _config.Profile.requireDeadmanSwitch;
             deadmanStatusText.text = isDeadman
-                ? (reqHold ? "DRIVE ENGAGED (DEADMAN HELD)" : "DRIVE READY (SEAMLESS WASD / STICK)")
-                : "DRIVE LOCKED (HOLD SHIFT OR GRIP)";
+                ? (reqHold ? "JOYSTICK ENGAGED (DEADMAN HELD)" : "JOYSTICK READY (100% FULL CONTROL)")
+                : "DRIVE LOCKED (HOLD TRIGGER / SHIFT)";
         }
         if (deadmanIndicatorDot != null)
         {
             deadmanIndicatorDot.color = isDeadman ? new Color(0f, 1f, 0.45f, 1f) : new Color(1f, 0.3f, 0.25f, 1f);
         }
 
+        // 4. Always update Gimbal & Drive Gauges immediately from Joystick when offline!
         if (VResqClient.Instance == null || !VResqClient.Instance.IsConnected)
         {
-            UpdateStandbyPreviewMode();
+            UpdateInteractiveLocalPreview();
         }
     }
 
     private void OnRobotConnected()
     {
         RefreshFleetNodeCards();
-        if (videoOverlayText != null)
-        {
-            videoOverlayText.text = "";
-        }
     }
 
     private void OnRobotDisconnected()
@@ -399,8 +394,8 @@ public class RescueRobotVRHUD : MonoBehaviour
         RefreshFleetNodeCards();
         if (latencyText != null)
         {
-            latencyText.text = "LINK: RECONNECTING...";
-            latencyText.color = new Color(1f, 0.7f, 0.2f, 1f);
+            latencyText.text = "LOCAL JOYSTICK SIM (SEARCHING ROBOT...)";
+            latencyText.color = new Color(1f, 0.78f, 0.2f, 1f);
         }
         if (obstacleAlertPanel != null)
             obstacleAlertPanel.SetActive(false);
@@ -410,7 +405,6 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         if (state == null) return;
 
-        // 1. Top Command Bar
         string rName = (state.node_info != null && !string.IsNullOrEmpty(state.node_info.node_name))
             ? state.node_info.node_name
             : (state.identity != null && !string.IsNullOrEmpty(state.identity.node_name) ? state.identity.node_name : "VRESQ-UNIT");
@@ -428,7 +422,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         {
             float rtt = VResqClient.Instance.LatencyMs;
             float camFps = _cameraReceiver != null ? _cameraReceiver.StreamFps : 0f;
-            latencyText.text = $"WS: {rtt:F0}ms  |  VIDEO: {camFps:F0} FPS";
+            latencyText.text = $"WS: {rtt:F0}ms  |  SURROUND CAM: {camFps:F0} FPS";
             latencyText.color = rtt < 45f ? new Color(0f, 1f, 0.45f, 1f) : (rtt < 110f ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(1f, 0.35f, 0.35f, 1f));
         }
 
@@ -440,17 +434,16 @@ public class RescueRobotVRHUD : MonoBehaviour
             aiStatusBadgeText.color = aiCount > 0 ? new Color(1f, 0.85f, 0.2f, 1f) : new Color(0.55f, 0.9f, 1f, 0.9f);
         }
 
-        // 2. Center HUD Flight & Propulsion
         float yaw = state.telemetry != null ? ((state.telemetry.yaw_deg % 360f) + 360f) % 360f : 0f;
         if (compassHeadingText != null)
         {
             compassHeadingText.text = $"◄  HDG {yaw:000}° {GetCompassDirection(yaw)}  ►";
         }
 
-        float throttlePct = (state.speed_scale > 0.01f ? state.speed_scale : (_teleop != null ? _teleop.speedScale : 0.75f)) * 100f;
+        float throttlePct = (_teleop != null ? _teleop.EffectiveSpeedScale : state.speed_scale) * 100f;
         if (speedPercentText != null)
         {
-            speedPercentText.text = $"SPEED LIMIT: {throttlePct:F0}% [-/=]";
+            speedPercentText.text = $"SPEED LIMIT: {throttlePct:F0}% [DPAD UP/DN]";
         }
         if (speedBarFill != null)
         {
@@ -460,46 +453,17 @@ public class RescueRobotVRHUD : MonoBehaviour
         int lPwm = state.telemetry != null && state.telemetry.motor_left_cmd != 0 ? state.telemetry.motor_left_cmd : state.left_pwm;
         int rPwm = state.telemetry != null && state.telemetry.motor_right_cmd != 0 ? state.telemetry.motor_right_cmd : state.right_pwm;
 
-        if (motorLeftText != null)
-        {
-            motorLeftText.text = $"L-TRK {(lPwm >= 0 ? "+" : "")}{lPwm}";
-            motorLeftText.color = lPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
-        }
-        if (motorLeftBarFill != null)
-        {
-            motorLeftBarFill.fillAmount = Mathf.Clamp01(Mathf.Abs(lPwm) / 255f);
-        }
+        UpdateMotorGauges(lPwm, rPwm);
 
-        if (motorRightText != null)
-        {
-            motorRightText.text = $"R-TRK {(rPwm >= 0 ? "+" : "")}{rPwm}";
-            motorRightText.color = rPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
-        }
-        if (motorRightBarFill != null)
-        {
-            motorRightBarFill.fillAmount = Mathf.Clamp01(Mathf.Abs(rPwm) / 255f);
-        }
-
-        int sDeg = state.telemetry != null && state.telemetry.servo_deg > 0 ? state.telemetry.servo_deg : state.servo_deg;
-        if (sDeg == 0) sDeg = 90;
-        if (servoPanText != null)
-        {
-            servoPanText.text = $"GIMBAL PAN: {sDeg:000}° [Q/E]";
-        }
-        if (servoTickIndicator != null)
-        {
-            float normServo = Mathf.InverseLerp(20f, 160f, sDeg);
-            float barWidth = 220f;
-            servoTickIndicator.anchoredPosition = new Vector2((normServo - 0.5f) * barWidth, 0f);
-        }
+        int sDeg = _teleop != null ? _teleop.currentServoDeg : (state.telemetry != null && state.telemetry.servo_deg > 0 ? state.telemetry.servo_deg : state.servo_deg);
+        UpdateServoGauge(sDeg);
 
         if (fsmActionText != null)
         {
-            string act = !string.IsNullOrEmpty(state.active_action) ? state.active_action.ToUpper() : "MANUAL TELEOP";
-            fsmActionText.text = $"FSM: {act}";
+            string act = !string.IsNullOrEmpty(state.active_action) ? state.active_action.ToUpper() : "JOYSTICK TELEOP";
+            fsmActionText.text = $"MODE: {act}";
         }
 
-        // 3. Ultrasonic Range & Collision Alert
         float dist = state.telemetry != null ? state.telemetry.ultrasonic_cm : 0f;
         float alertCm = _config != null ? _config.Profile.collisionAlertCm : 25f;
         float cautionCm = _config != null ? _config.Profile.collisionCautionCm : 55f;
@@ -518,14 +482,12 @@ public class RescueRobotVRHUD : MonoBehaviour
             obstacleAlertPanel.SetActive(alert);
             if (obstacleDistanceText != null && alert)
             {
-                obstacleDistanceText.text = $"⚠ PROXIMITY HAZARD — {dist:F0} CM AHEAD  |  AUTO-BRAKE / BACK OUT";
+                obstacleDistanceText.text = $"⚠ PROXIMITY HAZARD — {dist:F0} CM AHEAD  |  AUTO-BRAKE";
             }
         }
 
-        // 4. AI Bounding Boxes on Center Viewport
         RenderAiDetections(state.ai_detections);
 
-        // 5. Right Wing Panel: Attitude, Environment, and Hardware Health
         if (state.telemetry != null)
         {
             float pitch = state.telemetry.pitch_deg;
@@ -566,14 +528,78 @@ public class RescueRobotVRHUD : MonoBehaviour
                     $"<b>AI ENGINE:</b> {aiMode} ({aiFps:F1} FPS)";
             }
         }
+    }
 
-        if (batteryText != null)
+    private void UpdateMotorGauges(int lPwm, int rPwm)
+    {
+        if (motorLeftText != null)
         {
-            batteryText.text = "12.4 V  [92%]";
+            motorLeftText.text = $"L-TRK {(lPwm >= 0 ? "+" : "")}{lPwm}";
+            motorLeftText.color = lPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
         }
-        if (batteryBarFill != null)
+        if (motorLeftBarFill != null)
         {
-            batteryBarFill.fillAmount = 0.92f;
+            motorLeftBarFill.fillAmount = Mathf.Clamp01(Mathf.Abs(lPwm) / 255f);
+        }
+
+        if (motorRightText != null)
+        {
+            motorRightText.text = $"R-TRK {(rPwm >= 0 ? "+" : "")}{rPwm}";
+            motorRightText.color = rPwm != 0 ? new Color(0f, 1f, 0.65f, 1f) : new Color(0.75f, 0.9f, 1f, 0.9f);
+        }
+        if (motorRightBarFill != null)
+        {
+            motorRightBarFill.fillAmount = Mathf.Clamp01(Mathf.Abs(rPwm) / 255f);
+        }
+    }
+
+    private void UpdateServoGauge(int sDeg)
+    {
+        if (sDeg == 0) sDeg = 90;
+        if (servoPanText != null)
+        {
+            servoPanText.text = $"CAM GIMBAL: {sDeg:000}° [R-STICK / DPAD]";
+        }
+        if (servoTickIndicator != null)
+        {
+            float normServo = Mathf.InverseLerp(20f, 160f, sDeg);
+            servoTickIndicator.anchoredPosition = new Vector2((normServo - 0.5f) * 220f, 0f);
+        }
+    }
+
+    private void UpdateInteractiveLocalPreview()
+    {
+        if (_teleop == null) return;
+
+        float heading = _teleop.SimulatedHeadingDeg;
+        if (compassHeadingText != null)
+            compassHeadingText.text = $"◄  HDG {heading:000}° {GetCompassDirection(heading)}  ►";
+
+        float throttlePct = _teleop.EffectiveSpeedScale * 100f;
+        if (speedPercentText != null)
+            speedPercentText.text = $"SPEED LIMIT: {throttlePct:F0}% [DPAD UP/DN]";
+        if (speedBarFill != null)
+            speedBarFill.fillAmount = Mathf.Clamp01(throttlePct / 100f);
+
+        UpdateMotorGauges(_teleop.SimulatedLeftPwm, _teleop.SimulatedRightPwm);
+        UpdateServoGauge(_teleop.currentServoDeg);
+
+        if (radarMap != null && radarMap.mapCoordsText != null)
+        {
+            Vector2 p = _teleop.SimulatedPose;
+            radarMap.mapCoordsText.text = $"X: {p.x:+0.00;-0.00}m   Y: {p.y:+0.00;-0.00}m\nHDG: {heading:000}°  |  CAM: {_teleop.currentServoDeg:000}°  |  JOYSTICK ACTIVE";
+        }
+
+        float roll = -_teleop.LiveDriveStick.x * 8f;
+        float pitch = _teleop.LiveDriveStick.y * 6f;
+        if (pitchText != null) pitchText.text = $"PITCH: {pitch:+0.0;-0.0}°";
+        if (rollText != null) rollText.text = $"ROLL:  {roll:+0.0;-0.0}°";
+        if (yawText != null) yawText.text = $"YAW:   {heading:000.0}°";
+
+        if (imuHorizonBall != null)
+        {
+            imuHorizonBall.localEulerAngles = new Vector3(0f, 0f, -roll);
+            imuHorizonBall.anchoredPosition = new Vector2(0f, pitch * 1.8f);
         }
     }
 
@@ -675,26 +701,7 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         if (swarmStatusText == null) return;
         int peerCount = peers != null ? peers.Count : 0;
-        swarmStatusText.text = $"mDNS MESH DISCOVERY: {peerCount} PEERS ACTIVE  |  HOTKEYS [1] [2] [3]";
-    }
-
-    private void UpdateStandbyPreviewMode()
-    {
-        float heading = (_timer * 12f) % 360f;
-        if (compassHeadingText != null)
-            compassHeadingText.text = $"◄  HDG {heading:000}° {GetCompassDirection(heading)}  ►";
-
-        float roll = Mathf.Sin(_timer * 1.4f) * 4.5f;
-        float pitch = Mathf.Cos(_timer * 1.1f) * 3.0f;
-        if (pitchText != null) pitchText.text = $"PITCH: {pitch:+0.0;-0.0}°";
-        if (rollText != null) rollText.text = $"ROLL:  {roll:+0.0;-0.0}°";
-        if (yawText != null) yawText.text = $"YAW:   {heading:000.0}°";
-
-        if (imuHorizonBall != null)
-        {
-            imuHorizonBall.localEulerAngles = new Vector3(0f, 0f, -roll);
-            imuHorizonBall.anchoredPosition = new Vector2(0f, pitch * 1.8f);
-        }
+        swarmStatusText.text = $"mDNS MESH: {peerCount} PEERS  |  SWITCH: [LB] OR [1-3]";
     }
 
     private static string GetCompassDirection(float yaw)
