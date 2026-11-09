@@ -22,8 +22,8 @@ namespace VResQ.Core
         public static VResqClient Instance { get; private set; }
 
         [Header("Target Robot Connection")]
-        [Tooltip("IP Address of target robot (10.66.68.82, 10.66.68.10, 10.66.68.52)")]
-        public string robotIp = "10.66.68.82";
+        [Tooltip("IP Address of target robot (172.20.10.3, 172.20.10.2, 10.66.68.82)")]
+        public string robotIp = "172.20.10.3";
 
         [Tooltip("HTTP & WebSocket Port (Default: 8000)")]
         public int port = 8000;
@@ -38,7 +38,7 @@ namespace VResQ.Core
         [SerializeField] private bool isConnected = false;
         public bool IsConnected => isConnected;
 
-        [SerializeField] private int activeNodeIndex = 2;
+        [SerializeField] private int activeNodeIndex = 0;
         public int ActiveNodeIndex => activeNodeIndex;
 
         [SerializeField] private float latencyMs = 18f;
@@ -651,6 +651,60 @@ namespace VResQ.Core
                             {
                                 DiscoveredSwarmPeers = new List<DiscoveredPeerData>(resp.discovered);
                                 OnSwarmUpdated?.Invoke(DiscoveredSwarmPeers);
+
+                                // Dynamically ingest discovered peers into fleetNodes if not present
+                                var cfg = VResqFrameworkConfig.Instance;
+                                if (cfg != null && cfg.Profile.fleetNodes != null)
+                                {
+                                    bool fleetChanged = false;
+                                    var currentFleet = new List<RobotNodeEndpoint>(cfg.Profile.fleetNodes);
+                                    foreach (var peer in resp.discovered)
+                                    {
+                                        string peerIp = (peer.ips != null && peer.ips.Length > 0) ? peer.ips[0] : "";
+                                        if (string.IsNullOrEmpty(peerIp) && !string.IsNullOrEmpty(peer.server))
+                                        {
+                                            peerIp = peer.server.Split(':')[0];
+                                        }
+                                        if (string.IsNullOrEmpty(peerIp)) continue;
+
+                                        bool exists = false;
+                                        foreach (var f in currentFleet)
+                                        {
+                                            if (f.ipAddress == peerIp)
+                                            {
+                                                exists = true;
+                                                f.isOnline = true;
+                                                f.remoteNodeName = peer.name;
+                                                if (peer.properties != null)
+                                                {
+                                                    f.remoteRole = peer.properties.role;
+                                                }
+                                                break;
+                                            }
+                                        }
+                                        if (!exists)
+                                        {
+                                            var newEndpoint = new RobotNodeEndpoint
+                                            {
+                                                displayName = !string.IsNullOrEmpty(peer.name) ? peer.name.ToUpper() : "SWARM NODE",
+                                                roleLabel = (peer.properties != null && !string.IsNullOrEmpty(peer.properties.role)) ? peer.properties.role.ToUpper() : "FOLLOWER",
+                                                ipAddress = peerIp,
+                                                port = peer.port > 0 ? peer.port : 8000,
+                                                isOnline = true,
+                                                remoteNodeName = peer.name,
+                                                remoteRole = (peer.properties != null) ? peer.properties.role : ""
+                                            };
+                                            currentFleet.Add(newEndpoint);
+                                            fleetChanged = true;
+                                            Debug.Log($"<color=cyan>[VResQ Swarm Discovery]</color> Auto-registered discovered node {newEndpoint.displayName} ({peerIp}) into Fleet!");
+                                        }
+                                    }
+                                    if (fleetChanged)
+                                    {
+                                        cfg.Profile.fleetNodes = currentFleet.ToArray();
+                                        OnFleetUpdated?.Invoke();
+                                    }
+                                }
                             }
                         }
                         catch { }

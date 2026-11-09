@@ -73,6 +73,17 @@ public class RescueRobotVRHUD : MonoBehaviour
     public TextMeshProUGUI healthText;
     public TextMeshProUGUI sensorListText;
 
+    [Header("--- User Experience & Audience Tier ---")]
+    public HudDensityMode hudDensity = HudDensityMode.Streamlined;
+    public TextMeshProUGUI hudDensityBadgeText;
+    public TextMeshProUGUI quickHelpHintText;
+
+    public enum HudDensityMode
+    {
+        Streamlined = 0, // คนทั่วไป: มองง่าย รู้ทันที ไม่บดบังทัศนวิสัยภาพรอบตัว
+        TacticalExpert = 1 // ผู้เชี่ยวชาญ: เจาะลึกข้อมูลเซ็นเซอร์ทั้งระบบ สถิติ Swarm, Serial Bus, และการวิเคราะห์สภาพแวดล้อม
+    }
+
     [Header("--- Bottom Command Deck ---")]
     public TextMeshProUGUI deadmanStatusText;
     public Image deadmanIndicatorDot;
@@ -104,7 +115,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (client == null)
         {
             client = gameObject.AddComponent<VResqClient>();
-            client.robotIp = "10.66.68.82";
+            client.robotIp = "172.20.10.3";
             client.port = 8000;
         }
 
@@ -179,6 +190,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             else if (n.Contains("BTN_BACK")) b.onClick.AddListener(() => _teleop?.ActionBackOut());
             else if (n.Contains("BTN_EXT_CAM")) b.onClick.AddListener(() => surroundDisplay?.ToggleExternalVsCamera());
             else if (n.Contains("BTN_VIEW") || n.Contains("BTN_SURROUND")) b.onClick.AddListener(() => surroundDisplay?.CycleNextViewMode());
+            else if (n.Contains("BTN_HUD_MODE") || n.Contains("BTN_DENSITY")) b.onClick.AddListener(ToggleHudDensity);
             else if (n.Contains("BTN_CONFIG") || n.Contains("BTN_SETTINGS")) b.onClick.AddListener(ToggleSettingsModal);
             else if (n.Contains("BTN_ESTOP") || n.Contains("BTN_STOP")) b.onClick.AddListener(() => _teleop?.ActionEmergencyStop());
             // Framework Settings Modal Controls
@@ -216,6 +228,39 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         VResqClient.Instance?.SwitchToNodeIndex(index);
         RefreshFleetNodeCards();
+    }
+
+    public void ToggleHudDensity()
+    {
+        hudDensity = (hudDensity == HudDensityMode.Streamlined)
+            ? HudDensityMode.TacticalExpert
+            : HudDensityMode.Streamlined;
+
+        ApplyHudDensityVisuals();
+        if (VResqClient.Instance != null && VResqClient.Instance.LatestState != null)
+        {
+            OnRobotStateReceived(VResqClient.Instance.LatestState);
+        }
+    }
+
+    public void ApplyHudDensityVisuals()
+    {
+        if (hudDensityBadgeText != null)
+        {
+            hudDensityBadgeText.text = (hudDensity == HudDensityMode.Streamlined)
+                ? "<b>HUD:</b> <color=#00FF88>🟢 STREAMLINED (มุมมองโปร่งสบาย)</color> <size=12><color=#88AACC>[H/R3 เพื่อเจาะลึก]</color></size>"
+                : "<b>HUD:</b> <color=#00E5FF>🔷 TACTICAL EXPERT (โหมดผู้เชี่ยวชาญ)</color> <size=12><color=#88AACC>[H/R3 เพื่อย่อ]</color></size>";
+        }
+
+        if (quickHelpHintText != null)
+        {
+            quickHelpHintText.text =
+                "<color=#00F0FF><b>🎮 [LS]</b> ขับเคลื่อน</color>   " +
+                "<color=#00FF88><b>[RS]</b> หันกล้องรอบตัว</color>   " +
+                "<color=#FFB703><b>[Y/F]</b> สลับภาพรอบตัว/ภายนอก</color>   " +
+                "<color=#00E5FF><b>[H / R3]</b> สลับ HUD มองง่าย ⟷ เจาะลึก</color>   " +
+                "<color=#00FF88><b>[LB / 1-3]</b> สลับหุ่นยนต์</color>";
+        }
     }
 
     public void ToggleSettingsModal()
@@ -368,15 +413,18 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (viewModeBadgeText != null && surroundDisplay != null)
         {
+            string modeHint = (hudDensity == HudDensityMode.Streamlined) ? " <color=#00FF88>[STREAMLINED]</color>" : " <color=#00E5FF>[EXPERT]</color>";
             viewModeBadgeText.text = surroundDisplay.currentViewMode switch
             {
-                SurroundViewMode.ExternalWorld => "🌐 VIEW: EXTERNAL WORLD (มองรอบนอก) [Y/F]",
-                SurroundViewMode.Surround360 => "🎥 VIEW: 360° SURROUND CAM (ภาพรอบตัว) [Y/V]",
-                SurroundViewMode.Surround220 => "🎥 VIEW: 220° PANORAMA CAM (ภาพรอบตัว) [Y/V]",
-                SurroundViewMode.Surround180 => "🎥 VIEW: 180° DOME CAM (ภาพรอบตัว) [Y/V]",
-                _ => "🎥 VIEW: SURROUND CAM [Y/V]"
+                SurroundViewMode.ExternalWorld => $"🌐 VIEW: EXTERNAL WORLD (มองเห็นรอบนอก) [Y/F]{modeHint}",
+                SurroundViewMode.Surround360 => $"🎥 VIEW: 360° SURROUND CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                SurroundViewMode.Surround220 => $"🎥 VIEW: 220° PANORAMA CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                SurroundViewMode.Surround180 => $"🎥 VIEW: 180° DOME CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                _ => $"🎥 VIEW: SURROUND CAM [Y/V]{modeHint}"
             };
         }
+
+        ApplyHudDensityVisuals();
 
         if (_teleop != null)
         {
@@ -384,7 +432,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             {
                 Vector2 st = _teleop.LiveDriveStick;
                 string joyIcon = _teleop.HasPhysicalJoystick ? "🎮 JOYSTICK:" : "⌨ INPUT:";
-                controllerStatusText.text = $"{joyIcon} {_teleop.ActiveControllerName}  |  L-STICK ({st.x:+0.00;-0.00}, {st.y:+0.00;-0.00})";
+                controllerStatusText.text = $"{joyIcon} <b>{_teleop.ActiveControllerName}</b>  |  L-STICK ({st.x:+0.00;-0.00}, {st.y:+0.00;-0.00})";
                 controllerStatusText.color = _teleop.HasPhysicalJoystick ? new Color(0f, 1f, 0.55f, 1f) : new Color(0.6f, 0.92f, 1f, 1f);
             }
 
@@ -440,11 +488,12 @@ public class RescueRobotVRHUD : MonoBehaviour
         var id = (s.identity != null && !string.IsNullOrEmpty(s.identity.node_name)) ? s.identity : s.node_info;
         string rName = id != null && !string.IsNullOrEmpty(id.node_name) ? id.node_name : "vresq-node-zero";
         string role = id != null && !string.IsNullOrEmpty(id.role) ? id.role : "t2-dashboard";
-        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "10.66.68.82";
+        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "172.20.10.3";
 
         if (robotIdText != null)
         {
-            robotIdText.text = $"● {rName.ToUpper()}  [{role.ToUpper()}]  •  {curIp}";
+            string tierTag = (hudDensity == HudDensityMode.Streamlined) ? "<color=#00FF88>● EASY</color>" : "<color=#00F0FF>◆ EXPERT</color>";
+            robotIdText.text = $"{tierTag} <b>{rName.ToUpper()}</b>  <color=#88AACC>[{role.ToUpper()}]</color>  •  {curIp}";
         }
 
         if (latencyText != null && VResqClient.Instance != null)
@@ -452,8 +501,9 @@ public class RescueRobotVRHUD : MonoBehaviour
             float rtt = VResqClient.Instance.LatencyMs;
             float camFps = _cameraReceiver != null ? _cameraReceiver.StreamFps : 0f;
             int frames = _cameraReceiver != null ? _cameraReceiver.FramesReceived : 0;
-            string camStr = frames > 0 ? $"VIDEO: {Mathf.Max(1f, camFps):F0} FPS (LIVE)" : "VIDEO: CONNECTING...";
-            latencyText.text = $"ONLINE  |  RTT: {rtt:F0} ms  |  {camStr}";
+            string camStr = frames > 0 ? $"LIVE {Mathf.Max(1f, camFps):F0} FPS" : "CONNECTING...";
+            string linkColor = rtt < 40f ? "#00FF88" : (rtt < 100f ? "#FFD166" : "#FF5566");
+            latencyText.text = $"<color={linkColor}>ONLINE {rtt:F0}ms</color>  |  CAM: <color=#00F0FF>{camStr}</color>";
             latencyText.color = new Color(0f, 1f, 0.5f, 1f);
         }
 
@@ -485,8 +535,16 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (opsStripText != null)
         {
-            opsStripText.text =
-                $"<b>Robot:</b> {rName}   |   <b>Serial:</b> {serialStr}   |   <b>FSM:</b> {fsmName}   |   <b>Action:</b> <color=#00F0FF>{actStr}</color>   |   <b>Cmd Age:</b> {cmdAgeStr}   |   <b>Telem Age:</b> {telAgeStr}";
+            if (hudDensity == HudDensityMode.Streamlined)
+            {
+                opsStripText.text =
+                    $"<b>หุ่นยนต์:</b> <color=#00F0FF>{rName}</color>   •   <b>การเชื่อมต่อ:</b> {serialStr}   •   <b>โหมด FSM:</b> <color=#00FF88>{fsmName}</color>   •   <b>ภารกิจ:</b> <color=#FFD166>{actStr.ToUpper()}</color>";
+            }
+            else
+            {
+                opsStripText.text =
+                    $"<b>Robot:</b> {rName}   |   <b>Serial:</b> {serialStr}   |   <b>FSM:</b> {fsmName}   |   <b>Action:</b> <color=#00F0FF>{actStr}</color>   |   <b>Cmd Age:</b> {cmdAgeStr}   |   <b>Telem Age:</b> {telAgeStr}";
+            }
         }
 
         if (sensorStripText != null)
@@ -498,8 +556,22 @@ public class RescueRobotVRHUD : MonoBehaviour
             string altCard = (freshTelemetry && sensors.bme280) ? $"{t.altitude_m:F1} m" : $"{t.altitude_m:F1} m";
             string yawCard = $"{normHdg:000.0}°";
 
-            sensorStripText.text =
-                $"<b>Ultrasonic:</b> {usCard}   |   <b>BME280:</b> {bmeCard}   |   <b>MPU6050:</b> {mpuCard}   |   <b>OLED:</b> {oledCard}   |   <b>Altitude:</b> {altCard}   |   <b>Fused Yaw:</b> <color=#00F0FF>{yawCard}</color>";
+            if (hudDensity == HudDensityMode.Streamlined)
+            {
+                float alertLimit = _config != null ? _config.Profile.collisionAlertCm : 25f;
+                string distPill = t.ultrasonic_cm > 0.5f 
+                    ? (t.ultrasonic_cm < alertLimit ? $"<color=#FF2A6D>⚠ {t.ultrasonic_cm:F0} cm (ใกล้)</color>" : $"<color=#00FF88>{t.ultrasonic_cm:F0} cm (ปลอดภัย)</color>") 
+                    : "<color=#70889B>-- cm (ทางโล่ง)</color>";
+                string tempPill = freshTelemetry ? $"<color=#00F0FF>{t.temp_c:F1}°C</color>" : "<color=#70889B>--</color>";
+                string hdgPill = $"<color=#00FF88>{normHdg:000}° {GetCompassDirection(normHdg)}</color>";
+                sensorStripText.text =
+                    $"<b>ระยะข้างหน้า:</b> {distPill}   •   <b>อุณหภูมิ:</b> {tempPill}   •   <b>ทิศทาง:</b> {hdgPill}";
+            }
+            else
+            {
+                sensorStripText.text =
+                    $"<b>Ultrasonic:</b> {usCard}   |   <b>BME280:</b> {bmeCard}   |   <b>MPU6050:</b> {mpuCard}   |   <b>OLED:</b> {oledCard}   |   <b>Altitude:</b> {altCard}   |   <b>Fused Yaw:</b> <color=#00F0FF>{yawCard}</color>";
+            }
         }
 
         // 3. AI Detection Badge & Bounding Boxes (Matches Web AI: JETSON (51 DET | 9.2 FPS))
@@ -587,9 +659,17 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (envMetricsText != null)
         {
-            envMetricsText.text =
-                $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}°     <b>Alt:</b> {t.altitude_m:F1} m\n" +
-                $"<b>Temp:</b> {t.temp_c:F1} °C    <b>Humid:</b> {t.humidity:F0} %    <b>Pressure:</b> {t.pressure_hpa:F0} hPa    <b>Heat Idx:</b> {t.heat_index_c:F1} °C";
+            if (hudDensity == HudDensityMode.Streamlined)
+            {
+                envMetricsText.text =
+                    $"<b>อุณหภูมิ:</b> <color=#00F0FF>{t.temp_c:F1}°C</color>   <b>ความชื้น:</b> <color=#00FF88>{t.humidity:F0}%</color>   <b>ความกดอากาศ:</b> <color=#FFD166>{t.pressure_hpa:F0} hPa</color>";
+            }
+            else
+            {
+                envMetricsText.text =
+                    $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}°     <b>Alt:</b> {t.altitude_m:F1} m\n" +
+                    $"<b>Temp:</b> {t.temp_c:F1} °C    <b>Humid:</b> {t.humidity:F0} %    <b>Pressure:</b> {t.pressure_hpa:F0} hPa    <b>Heat Idx:</b> {t.heat_index_c:F1} °C";
+            }
         }
 
         // 7. Right Wing Card 2: Smart Assist (Exact match to renderSmartAssist in Web app.js)
@@ -611,10 +691,19 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (smartAssistText != null)
         {
-            smartAssistText.text =
-                $"<b>Health Score:</b> <color={scoreColor}>{score}%</color>   |   <b>Link:</b> {linkQual}   |   <b>Obstacle:</b> {obsStatus}\n" +
-                $"<b>Sensor Bus:</b> {busStatus}   |   <b>Roughness:</b> {t.terrain_roughness:F2}\n" +
-                $"<b>Suggestion:</b> <color=#00F0FF>{suggestion}</color>";
+            if (hudDensity == HudDensityMode.Streamlined)
+            {
+                smartAssistText.text =
+                    $"<b>ความพร้อมระบบ:</b> <color={scoreColor}>{score}%</color>   •   <b>สิ่งกีดขวาง:</b> {obsStatus}\n" +
+                    $"<b>คำแนะนำ:</b> <color=#00F0FF>{suggestion}</color>";
+            }
+            else
+            {
+                smartAssistText.text =
+                    $"<b>Health Score:</b> <color={scoreColor}>{score}%</color>   |   <b>Link:</b> {linkQual}   |   <b>Obstacle:</b> {obsStatus}\n" +
+                    $"<b>Sensor Bus:</b> {busStatus}   |   <b>Roughness:</b> {t.terrain_roughness:F2}\n" +
+                    $"<b>Suggestion:</b> <color=#00F0FF>{suggestion}</color>";
+            }
         }
 
         // 8. Right Wing Card 3: Mission Assessment & Intelligence (Matches Web assessment-panel)
@@ -630,12 +719,21 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (hardwareHealthText != null)
         {
-            hardwareHealthText.text =
-                $"<b>SURVIVABILITY SCORE: <color=#00FF88>{survScore}%</color></b>\n" +
-                $"• <b>การยึดเกาะ/ล้อขับ:</b> <color=#00FF88>{tractionStr}</color>\n" +
-                $"• <b>สภาพโพรงอากาศ:</b> STABLE ATMOSPHERE   |   <b>จุดน้ำค้าง:</b> DP {dewPoint:F1}°C\n" +
-                $"• <b>ความลาดชัน:</b> {terrainGrade}\n" +
-                $"• <b>AI Field Assessment:</b> โหนด {rName} ออนไลน์ (AI {totalDet} เหตุการณ์, กล้อง Servo {sDeg}°)";
+            if (hudDensity == HudDensityMode.Streamlined)
+            {
+                hardwareHealthText.text =
+                    $"<b>อัตราการอยู่รอด (SURVIVABILITY):</b> <size=18><color=#00FF88>{survScore}%</color></size>\n" +
+                    $"<b>สภาพพื้นผิว:</b> <color=#00F0FF>{tractionStr}</color>   •   <b>ความชัน:</b> {terrainGrade}";
+            }
+            else
+            {
+                hardwareHealthText.text =
+                    $"<b>SURVIVABILITY SCORE: <color=#00FF88>{survScore}%</color></b>\n" +
+                    $"• <b>การยึดเกาะ/ล้อขับ:</b> <color=#00FF88>{tractionStr}</color>\n" +
+                    $"• <b>สภาพโพรงอากาศ:</b> STABLE ATMOSPHERE   |   <b>จุดน้ำค้าง:</b> DP {dewPoint:F1}°C\n" +
+                    $"• <b>ความลาดชัน:</b> {terrainGrade}\n" +
+                    $"• <b>AI Field Assessment:</b> โหนด {rName} ออนไลน์ (AI {totalDet} เหตุการณ์, กล้อง Servo {sDeg}°)";
+            }
         }
     }
 

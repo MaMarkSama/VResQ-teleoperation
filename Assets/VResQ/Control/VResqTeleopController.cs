@@ -261,7 +261,8 @@ namespace VResQ.Control
                 }
                 if (gp.leftStickButton.wasPressedThisFrame || gp.selectButton.wasPressedThisFrame)
                 {
-                    ResetLookOrientation();
+                    var hud = FindFirstObjectByType<RescueRobotVRHUD>();
+                    if (hud != null) hud.ToggleHudDensity();
                 }
                 if (gp.startButton.wasPressedThisFrame)
                 {
@@ -417,11 +418,16 @@ namespace VResQ.Control
                 if (kb.digit2Key.wasPressedThisFrame || kb.numpad2Key.wasPressedThisFrame) VResqClient.Instance?.SwitchToNodeIndex(1);
                 if (kb.digit3Key.wasPressedThisFrame || kb.numpad3Key.wasPressedThisFrame) VResqClient.Instance?.SwitchToNodeIndex(2);
 
-                // Tab: Config Modal, R: Recenter, C: Center Servo
+                // Tab: Config Modal, H: Toggle HUD Mode, R: Recenter, C: Center Servo
                 if (kb.tabKey.wasPressedThisFrame)
                 {
                     var hud = FindFirstObjectByType<RescueRobotVRHUD>();
                     if (hud != null) hud.ToggleSettingsModal();
+                }
+                if (kb.hKey.wasPressedThisFrame)
+                {
+                    var hud = FindFirstObjectByType<RescueRobotVRHUD>();
+                    if (hud != null) hud.ToggleHudDensity();
                 }
                 if (kb.rKey.wasPressedThisFrame) ResetLookOrientation();
                 if (kb.cKey.wasPressedThisFrame) ActionCenter();
