@@ -22,8 +22,8 @@ namespace VResQ.Core
         public static VResqClient Instance { get; private set; }
 
         [Header("Target Robot Connection")]
-        [Tooltip("IP Address of target robot (172.20.10.3, 172.20.10.2, 10.66.68.82)")]
-        public string robotIp = "172.20.10.3";
+        [Tooltip("IP Address of target robot (172.20.10.4, 172.20.10.2, 172.20.10.3)")]
+        public string robotIp = "172.20.10.4";
 
         [Tooltip("HTTP & WebSocket Port (Default: 8000)")]
         public int port = 8000;

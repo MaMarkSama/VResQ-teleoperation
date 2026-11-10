@@ -35,9 +35,9 @@ namespace VResQ.Core
         // 1. Network & Swarm Fleet
         public RobotNodeEndpoint[] fleetNodes = new RobotNodeEndpoint[]
         {
-            new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "LEADER", ipAddress = "172.20.10.3", port = 8000 },
-            new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "WINGMAN", ipAddress = "172.20.10.2", port = 8000 },
-            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "10.66.68.82", port = 8000 }
+            new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "COMMANDER", ipAddress = "172.20.10.4", port = 8000 },
+            new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "RELAY", ipAddress = "172.20.10.2", port = 8000 },
+            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "172.20.10.3", port = 8000 }
         };
         public int defaultNodeIndex = 0;
         public bool autoFallbackToOnlineNode = true;

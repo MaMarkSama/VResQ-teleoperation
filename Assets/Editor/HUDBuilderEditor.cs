@@ -97,7 +97,7 @@ public class HUDBuilderEditor : EditorWindow
         VResqFrameworkConfig cfg = hudRoot.AddComponent<VResqFrameworkConfig>();
         cfg.Profile.viewMode = SurroundViewMode.Surround360;
         cfg.Profile.surroundArcAngle = 360f;
-        cfg.Profile.defaultNodeIndex = 2; // Default to Node 2 (10.66.68.82) which is active & streaming, with auto-failover to Node 1/0
+        cfg.Profile.defaultNodeIndex = 0; // Default to Node 0 (172.20.10.4) Commander C2
         cfg.Profile.autoFallbackToOnlineNode = true;
         cfg.Profile.showCenterMonitorInSurround = false;
 
