@@ -25,6 +25,8 @@ namespace VResQ.Robotics
     public class VResqBareBoardSimulator : MonoBehaviour
     {
         [Header("Target Physical Board (Bare Board without ESP32)")]
+        [Tooltip("Disabled by default so physical hardware runs in LIVE-HW mode. Enable only for 3D SIL testing.")]
+        public bool enableSilSimulation = false;
         public int robotId = 1;
         public string boardEndpoint = "http://172.20.10.4:8000";
         [Range(2f, 20f)]
@@ -64,18 +66,18 @@ namespace VResQ.Robotics
 
         private void OnEnable()
         {
+            if (!enableSilSimulation)
+            {
+                _running = false;
+                return;
+            }
             _running = true;
             StartCoroutine(SilSimulationLoop());
         }
 
-        private void OnDisable()
-        {
-            _running = false;
-            StopAllCoroutines();
-        }
-
         private void Update()
         {
+            if (!enableSilSimulation) return;
             ApplyDifferentialDriveKinematics(Time.deltaTime);
             ApplyServoHeadRotation(Time.deltaTime);
         }

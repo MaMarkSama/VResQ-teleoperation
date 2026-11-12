@@ -82,6 +82,26 @@ namespace VResQ.Video
             }
         }
 
+        private void OnDestroy()
+        {
+            if (VResqFrameworkConfig.Instance != null)
+            {
+                VResqFrameworkConfig.Instance.OnConfigChanged.RemoveListener(SyncFromFrameworkConfig);
+            }
+            if (_runtimeMaterial != null)
+            {
+                if (Application.isPlaying) Destroy(_runtimeMaterial);
+                else DestroyImmediate(_runtimeMaterial);
+                _runtimeMaterial = null;
+            }
+            if (_screenMesh != null)
+            {
+                if (Application.isPlaying) Destroy(_screenMesh);
+                else DestroyImmediate(_screenMesh);
+                _screenMesh = null;
+            }
+        }
+
         public void SyncFromFrameworkConfig()
         {
             var cfg = VResqFrameworkConfig.Instance;
@@ -134,6 +154,8 @@ namespace VResQ.Video
                 Shader shader = Shader.Find("Unlit/Texture");
                 if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
                 if (shader == null) shader = Shader.Find("Sprites/Default");
+                if (shader == null) shader = Shader.Find("UI/Default");
+                if (shader == null) return;
 
                 _runtimeMaterial = new Material(shader);
                 _runtimeMaterial.name = "SurroundScreen_RuntimeMaterial";

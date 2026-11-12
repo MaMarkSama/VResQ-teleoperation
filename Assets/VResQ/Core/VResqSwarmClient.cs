@@ -27,19 +27,20 @@ namespace VResQ.Core
         {
             "http://172.20.10.4:8000",
             "http://172.20.10.2:8000",
+            "http://172.20.10.6:8000",
             "http://172.20.10.3:8000"
         };
 
         public int activeEndpointIndex = 0;
         public int udpGossipPort = 51235;
-        public float pollIntervalSeconds = 0.75f;
+        public float pollIntervalSeconds = 1.0f;
 
         [Header("Live Swarm State (Read-Only)")]
         public string activeLeaderEndpoint = "http://172.20.10.4:8000";
         public int activeLeaderId = 1;
         public int aliveNodesCount = 0;
         public bool versionSynced = false;
-        public string currentFormation = "convoy";
+        public string currentFormation = "relay_chain";
         public string currentScenario = "normal";
 
         public SwarmSummaryResponse LatestSwarmSummary { get; private set; }
@@ -157,15 +158,26 @@ namespace VResQ.Core
                             if (summary != null)
                             {
                                 LatestSwarmSummary = summary;
-                                activeLeaderId = summary.leader_id;
-                                aliveNodesCount = summary.alive_nodes;
-                                versionSynced = summary.version_synced;
-                                currentFormation = summary.formation;
-                                currentScenario = summary.scenario;
+                                var sb = summary.swarm_summary;
+                                activeLeaderId = (sb != null && sb.leader_robot_id > 0) ? sb.leader_robot_id : (summary.leader_id > 0 ? summary.leader_id : 1);
+                                aliveNodesCount = (sb != null && sb.alive_nodes > 0) ? sb.alive_nodes : summary.alive_nodes;
+                                versionSynced = (sb != null) ? sb.version_synced : summary.version_synced;
+                                currentFormation = (sb != null && !string.IsNullOrEmpty(sb.formation)) ? sb.formation : (!string.IsNullOrEmpty(summary.formation) ? summary.formation : "relay_chain");
+                                currentScenario = (sb != null && !string.IsNullOrEmpty(sb.scenario)) ? sb.scenario : (!string.IsNullOrEmpty(summary.scenario) ? summary.scenario : "normal");
 
+                                if (summary.local_node != null && summary.local_node.robot_id > 0)
+                                    NodesById[summary.local_node.robot_id] = summary.local_node;
                                 if (summary.self != null && summary.self.robot_id > 0)
                                     NodesById[summary.self.robot_id] = summary.self;
 
+                                if (summary.nodes != null)
+                                {
+                                    foreach (var node in summary.nodes)
+                                    {
+                                        if (node != null && node.robot_id > 0)
+                                            NodesById[node.robot_id] = node;
+                                    }
+                                }
                                 if (summary.peers != null)
                                 {
                                     foreach (var peer in summary.peers)
@@ -211,6 +223,7 @@ namespace VResQ.Core
         {
             SendSwarmMission(new SwarmMissionRequest
             {
+                action = "set_formation",
                 command = "set_formation",
                 formation = formation
             });
@@ -220,6 +233,7 @@ namespace VResQ.Core
         {
             SendSwarmMission(new SwarmMissionRequest
             {
+                action = "set_scenario",
                 command = "set_scenario",
                 scenario = scenario
             });
@@ -229,6 +243,7 @@ namespace VResQ.Core
         {
             SendSwarmMission(new SwarmMissionRequest
             {
+                action = "estop",
                 command = "estop"
             });
         }
@@ -237,6 +252,7 @@ namespace VResQ.Core
         {
             SendSwarmMission(new SwarmMissionRequest
             {
+                action = "reset_estop",
                 command = "reset_estop"
             });
         }
@@ -245,10 +261,12 @@ namespace VResQ.Core
         {
             SendSwarmMission(new SwarmMissionRequest
             {
+                action = "waypoint",
                 command = "waypoint",
+                robot_id = targetRobotId,
                 target_robot_id = targetRobotId,
-                x = xMeters,
-                y = yMeters
+                x = xMeters * 100f,
+                y = yMeters * 100f
             });
         }
 

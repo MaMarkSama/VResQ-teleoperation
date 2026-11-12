@@ -24,6 +24,45 @@ namespace VResQ.Core
         public bool oled;
     }
 
+    [Serializable]
+    public class SensorStatusDetail
+    {
+        public bool esp32_online;
+        public bool serial_port_open;
+        public bool ultrasonic;
+        public bool bme280;
+        public bool mpu6050;
+        public bool oled;
+        public string temp_source = "host_board";
+        public string heading_source = "odometry";
+    }
+
+    [Serializable]
+    public class HostSummaryData
+    {
+        public float cpu_temp_c;
+        public float gpu_temp_c;
+        public float board_temp_c;
+        public float max_temp_c;
+        public float ram_pct;
+        public float disk_pct;
+        public float load_1m;
+        public float uptime_s;
+    }
+
+    [Serializable]
+    public class EnvironmentData
+    {
+        public float temp_c;
+        public float humidity_pct;
+        public float pressure_hpa;
+        public float heat_index_c;
+        public float board_temp_c;
+        public float cpu_temp_c;
+        public float display_temp_c;
+        public string source = "host_board";
+    }
+
     /// <summary>
     /// Telemetry metrics received from ESP32 & Sensors (MPU6050, BME280, Ultrasonic, OLED)
     /// Matches the exact JSON structure of the V-ResQ Web Dashboard (/api/state & /ws).
@@ -135,16 +174,36 @@ namespace VResQ.Core
     }
 
     [Serializable]
+    public class DiscoveredPeerProperties
+    {
+        public string node_uid;
+        public string uid;
+        public string robot_id = "1";
+        public string cluster_id = "0";
+        public string node_name = "vresq-node";
+        public string name = "vresq-node";
+        public string role = "t2-dashboard";
+        public string protocol_version = "5";
+    }
+
+    [Serializable]
     public class DiscoveredPeerData
     {
+        public string node_uid;
+        public string node_name;
         public string name;
+        public int robot_id = 1;
+        public string role;
         public string server;
+        public string ip;
         public string[] ips;
         public int port = 8000;
-        public NodeIdentityData properties;
+        public DiscoveredPeerProperties properties;
         public float latency_ms;
         public bool online = true;
         public string discovery_mode;
+        public string hw_mode = "LIVE-HW";
+        public int health_score = 95;
     }
 
     [Serializable]
@@ -176,7 +235,13 @@ namespace VResQ.Core
         public bool estop;
         public bool buzzer;
         public bool serial_connected;
+        public bool esp32_online;
+        public bool camera_ready;
+        public bool motion_authorized;
         public string serial_port;
+        public string hw_mode = "LIVE-HW";
+        public string mode_name = "READY";
+        public float battery_v = 12.2f;
         public float last_command_age_ms;
         public float last_telem_age_ms;
         public string active_action;
@@ -184,6 +249,10 @@ namespace VResQ.Core
         public float pose_x;
         public float pose_y;
         public float pose_heading;
+        public SwarmPose pose = new SwarmPose();
+        public HostSummaryData host = new HostSummaryData();
+        public SensorStatusDetail sensor_status = new SensorStatusDetail();
+        public EnvironmentData environment = new EnvironmentData();
         public bool radar_active;
 
         [NonSerialized]
@@ -233,6 +302,7 @@ namespace VResQ.Core
     public class ControlPayload
     {
         public string type = "control";
+        public int sequence = 1;
         public float linear;
         public float angular;
         public int servo = 90;
@@ -267,7 +337,9 @@ namespace VResQ.Core
     {
         public float x;
         public float y;
+        public float theta;
         public float heading;
+        public float heading_deg;
     }
 
     [Serializable]
@@ -284,31 +356,63 @@ namespace VResQ.Core
     {
         public string schema = "swarm-frame-v1";
         public string build_version = "3.5.0-swarm-unified";
+        public string node_uid;
         public string node_id;
         public int robot_id;
+        public string node_name;
         public string name;
         public string role;
+        public string role_category;
         public string swarm_role;
         public bool is_leader;
+        public bool is_self;
         public int leader_id;
         public string ip;
+        public string[] ips;
         public int port = 8000;
         public double ts;
-        public string hw_mode;
+        public string hw_mode = "LIVE-HW";
+        public bool serial_connected;
+        public bool esp32_online;
+        public int health_score = 95;
+        public float battery_v = 12.2f;
         public string sim_scenario;
+        public string mode_name = "READY";
         public string fsm_state;
         public string action;
         public bool estop;
-        public SwarmPose pose;
+        public SwarmPose pose = new SwarmPose();
         public SwarmActuators actuators;
         public TelemetryData telemetry;
+        public string state = "ALIVE";
+        public string link_state = "ALIVE";
         public string status;
         public float age_sec;
-        public bool online;
+        public bool online = true;
         public bool has_state;
         public string transport;
         public string video_url;
         public string dashboard_url;
+    }
+
+    [Serializable]
+    public class SwarmSummaryBlock
+    {
+        public int total_nodes;
+        public int alive_nodes;
+        public int stale_nodes;
+        public int lost_nodes;
+        public string leader_uid;
+        public string leader_name;
+        public int leader_robot_id;
+        public int swarm_health_score;
+        public bool version_synced;
+        public string build_version;
+        public string formation = "relay_chain";
+        public string mission = "cooperative_search";
+        public string scenario = "normal";
+        public int confirmed_survivors;
+        public int active_hazards;
     }
 
     [Serializable]
@@ -325,20 +429,31 @@ namespace VResQ.Core
         public int stale_nodes;
         public int lost_nodes;
         public bool version_synced;
+        public SwarmSummaryBlock swarm_summary = new SwarmSummaryBlock();
+        public SwarmFrame local_node;
         public SwarmFrame self;
+        public SwarmFrame[] nodes;
         public SwarmFrame[] peers;
     }
 
     [Serializable]
     public class FusedMapRobot
     {
+        public string node_uid;
         public int robot_id;
+        public string node_name;
         public string name;
         public string ip;
+        public string role;
+        public string role_category;
         public string swarm_role;
         public bool is_leader;
+        public bool is_self;
+        public string link_state = "ALIVE";
         public string status;
-        public string hw_mode;
+        public string hw_mode = "LIVE-HW";
+        public int health_score = 95;
+        public SwarmPose pose = new SwarmPose();
         public float x;
         public float y;
         public float heading;
@@ -351,11 +466,17 @@ namespace VResQ.Core
     {
         public int from_robot_id;
         public int to_robot_id;
+        public string from_name;
+        public string to_name;
+        public SwarmPose from_pose = new SwarmPose();
+        public SwarmPose to_pose = new SwarmPose();
         public float x1;
         public float y1;
         public float x2;
         public float y2;
         public float distance_m;
+        public float distance_cm;
+        public int link_quality_pct;
         public int quality_pct;
     }
 
@@ -457,15 +578,25 @@ namespace VResQ.Core
     [Serializable]
     public class SwarmMissionRequest
     {
+        public string action;
         public string command;
         public string formation;
         public string scenario;
+        public int robot_id;
         public int target_robot_id;
         public float x;
         public float y;
 
         public string ToJson()
         {
+            if (string.IsNullOrEmpty(action) && !string.IsNullOrEmpty(command))
+            {
+                action = command == "estop_all" ? "estop" : command;
+            }
+            if (robot_id == 0 && target_robot_id != 0)
+            {
+                robot_id = target_robot_id;
+            }
             return JsonUtility.ToJson(this);
         }
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -18,7 +19,7 @@ namespace VResQ.Video
     public class VResqCameraReceiver : MonoBehaviour
     {
         [Header("Stream Target")]
-        public string streamUrl = "http://10.66.68.82:8000/video_feed";
+        public string streamUrl = "http://172.20.10.4:8000/video_feed";
 
         [Header("Optional Target Displays")]
         public RawImage targetRawImage;
@@ -42,7 +43,7 @@ namespace VResQ.Video
         [SerializeField] private int framesReceived = 0;
         public int FramesReceived => framesReceived;
 
-        [SerializeField] private string activeCameraSourceIp = "10.66.68.82";
+        [SerializeField] private string activeCameraSourceIp = "172.20.10.4";
         public string ActiveCameraSourceIp => activeCameraSourceIp;
 
         private Texture2D _videoTexture;
@@ -53,7 +54,7 @@ namespace VResQ.Video
         private readonly object _frameLock = new object();
         private bool _hasNewFrame = false;
 
-        private string _preferredIp = "10.66.68.82";
+        private string _preferredIp = "172.20.10.4";
         private int _preferredPort = 8000;
         private int _fpsCounter = 0;
         private float _fpsTimer = 0f;
@@ -208,10 +209,11 @@ namespace VResQ.Video
         {
             StopStream();
             _cts = new CancellationTokenSource();
+            var token = _cts.Token;
             isStreaming = true;
             string prefIp = _preferredIp;
             int prefPort = _preferredPort;
-            Task.Run(() => StreamMasterLoopAsync(prefIp, prefPort, _cts.Token));
+            Task.Run(() => StreamMasterLoopAsync(prefIp, prefPort, token));
         }
 
         public void StopStream()
@@ -227,11 +229,11 @@ namespace VResQ.Video
         /// </summary>
         private async Task StreamMasterLoopAsync(string preferredIp, int preferredPort, CancellationToken token)
         {
-            string[] candidateIps = BuildCandidateIpOrder(preferredIp);
             int candidateIdx = 0;
 
             while (!token.IsCancellationRequested)
             {
+                string[] candidateIps = BuildCandidateIpOrder(preferredIp);
                 string ip = candidateIps[candidateIdx % candidateIps.Length];
                 int port = preferredPort > 0 ? preferredPort : 8000;
                 activeCameraSourceIp = ip;
@@ -258,16 +260,33 @@ namespace VResQ.Video
 
         private static string[] BuildCandidateIpOrder(string preferredIp)
         {
-            // Always prioritize preferredIp first, then 10.66.68.82 (live camera node), then 10.66.68.10, then 10.66.68.52
-            if (preferredIp == "10.66.68.82" || string.IsNullOrEmpty(preferredIp))
+            List<string> candidates = new List<string>();
+            if (!string.IsNullOrEmpty(preferredIp))
             {
-                return new[] { "10.66.68.82", "10.66.68.10", "10.66.68.52" };
+                candidates.Add(preferredIp);
             }
-            if (preferredIp == "10.66.68.10")
+
+            // Check dynamically discovered nodes from framework config
+            var cfg = VResqFrameworkConfig.Instance;
+            if (!object.ReferenceEquals(cfg, null) && cfg.Profile != null && cfg.Profile.fleetNodes != null)
             {
-                return new[] { "10.66.68.10", "10.66.68.82", "10.66.68.52" };
+                foreach (var fn in cfg.Profile.fleetNodes)
+                {
+                    if (fn != null && !string.IsNullOrEmpty(fn.ipAddress) && !candidates.Contains(fn.ipAddress))
+                    {
+                        candidates.Add(fn.ipAddress);
+                    }
+                }
             }
-            return new[] { preferredIp, "10.66.68.82", "10.66.68.10", "10.66.68.52" };
+
+            // Fallback list of known default nodes (including .6 hotspot DHCP)
+            string[] defaults = { "172.20.10.4", "172.20.10.6", "172.20.10.3", "172.20.10.2" };
+            foreach (var d in defaults)
+            {
+                if (!candidates.Contains(d)) candidates.Add(d);
+            }
+
+            return candidates.ToArray();
         }
 
         private async Task<int> StreamSingleNodeTcpAsync(string ip, int port, CancellationToken token)
@@ -302,23 +321,37 @@ namespace VResQ.Video
                     byte[] workBuffer = new byte[524288];
                     int workLen = 0;
                     var firstFrameWatch = System.Diagnostics.Stopwatch.StartNew();
+                    long lastReadMs = firstFrameWatch.ElapsedMilliseconds;
+                    Task sharedWatchdog = null;
 
                     while (!token.IsCancellationRequested)
                     {
-                        // Wait up to 2.2s for data if no frames received yet, or 3.5s once streaming
                         int readTimeoutMs = decodedFrames == 0 ? 2200 : 3500;
                         var readTask = netStream.ReadAsync(readBuffer, 0, readBuffer.Length, token);
-                        var readTimeout = Task.Delay(readTimeoutMs, token);
-                        var finishedRead = await Task.WhenAny(readTask, readTimeout);
 
-                        if (finishedRead != readTask)
+                        if (!readTask.IsCompleted)
                         {
-                            // Timed out waiting for bytes
-                            break;
+                            while (!readTask.IsCompleted && !token.IsCancellationRequested)
+                            {
+                                if (sharedWatchdog == null || sharedWatchdog.IsCompleted)
+                                {
+                                    sharedWatchdog = Task.Delay(400, token);
+                                }
+                                await Task.WhenAny(readTask, sharedWatchdog);
+                                if (!readTask.IsCompleted && (firstFrameWatch.ElapsedMilliseconds - lastReadMs) > readTimeoutMs)
+                                {
+                                    break;
+                                }
+                            }
+                            if (!readTask.IsCompleted)
+                            {
+                                break;
+                            }
                         }
 
                         int bytesRead = await readTask;
                         if (bytesRead <= 0) break;
+                        lastReadMs = firstFrameWatch.ElapsedMilliseconds;
 
                         if (workLen + bytesRead > workBuffer.Length)
                         {

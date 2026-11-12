@@ -95,20 +95,22 @@ public class HUDBuilderEditor : EditorWindow
 
         // 5. Attach Core Framework Components
         VResqFrameworkConfig cfg = hudRoot.AddComponent<VResqFrameworkConfig>();
-        cfg.Profile.viewMode = SurroundViewMode.Surround360;
+        cfg.Profile.viewMode = SurroundViewMode.ExternalWorld; // Default: VR Environment around, Robot Camera in center
         cfg.Profile.surroundArcAngle = 360f;
-        cfg.Profile.defaultNodeIndex = 0; // Default to Node 0 (172.20.10.4) Commander C2
+        cfg.Profile.defaultNodeIndex = 0; // Default to Node 0 (Commander C2)
         cfg.Profile.autoFallbackToOnlineNode = true;
-        cfg.Profile.showCenterMonitorInSurround = false;
+        cfg.Profile.showCenterMonitorInSurround = true;
+
+        VResqAutoDiscovery autoDiscovery = hudRoot.AddComponent<VResqAutoDiscovery>();
 
         VResqClient client = hudRoot.AddComponent<VResqClient>();
-        client.robotIp = "10.66.68.82";
+        client.robotIp = "172.20.10.4";
         client.port = 8000;
 
         VResqCameraReceiver camReceiver = hudRoot.AddComponent<VResqCameraReceiver>();
-        camReceiver.targetRawImage = null;
 
         VResqSurroundDisplay surround = hudRoot.AddComponent<VResqSurroundDisplay>();
+        surround.currentViewMode = SurroundViewMode.ExternalWorld;
         VResqTeleopController teleop = hudRoot.AddComponent<VResqTeleopController>();
         TacticalHUDFollow follow = hudRoot.AddComponent<TacticalHUDFollow>();
         RescueRobotVRHUD ctrl = hudRoot.AddComponent<RescueRobotVRHUD>();
@@ -274,12 +276,26 @@ public class HUDBuilderEditor : EditorWindow
             Vector2.zero, new Vector2(600f, 38f), 20, cCyan, TextAlignmentOptions.Center, true);
         ctrl.themeAccentGraphics.Add(ctrl.compassHeadingText);
 
-        // Transparent Open Visor Area (100% See-Through to 360° Surround Camera or External 3D World!)
+        // Transparent Open Visor Area (Center FPV Robot Camera Screen with Reticle & AI BBoxes)
         GameObject openVisorArea = new GameObject("Open_Visor_Reticle");
         openVisorArea.transform.SetParent(centerHUD.transform, false);
         RectTransform visorRt = openVisorArea.AddComponent<RectTransform>();
         visorRt.anchoredPosition = new Vector2(0f, 95f);
         visorRt.sizeDelta = new Vector2(760f, 420f);
+
+        // 1. Center FPV Robot Camera Screen (แสดงภาพสดจากกล้องหุ่นยนต์ตรงกลาง)
+        GameObject videoScreenObj = new GameObject("Center_Robot_Camera_Screen");
+        videoScreenObj.transform.SetParent(openVisorArea.transform, false);
+        RectTransform videoRt = videoScreenObj.AddComponent<RectTransform>();
+        videoRt.anchorMin = Vector2.zero;
+        videoRt.anchorMax = Vector2.one;
+        videoRt.offsetMin = Vector2.zero;
+        videoRt.offsetMax = Vector2.zero;
+        RawImage videoRawImg = videoScreenObj.AddComponent<RawImage>();
+        videoRawImg.color = new Color(0.08f, 0.12f, 0.18f, 0.95f);
+        ctrl.centerVideoScreen = videoRawImg;
+        camReceiver.targetRawImage = videoRawImg;
+        CreateBorder(videoScreenObj.transform, new Vector2(760f, 420f), cCyanDim, 1.5f);
 
         CreateBox("Reticle_H_Left", openVisorArea.transform, new Vector2(-24f, 0f), new Vector2(22f, 2f), new Color(0f, 1f, 0.85f, 0.45f));
         CreateBox("Reticle_H_Right", openVisorArea.transform, new Vector2(24f, 0f), new Vector2(22f, 2f), new Color(0f, 1f, 0.85f, 0.45f));

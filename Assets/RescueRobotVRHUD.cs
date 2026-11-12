@@ -128,9 +128,9 @@ public class RescueRobotVRHUD : MonoBehaviour
         surroundDisplay = GetComponent<VResqSurroundDisplay>();
         if (surroundDisplay == null) surroundDisplay = gameObject.AddComponent<VResqSurroundDisplay>();
 
-        if (_cameraReceiver != null)
+        if (_cameraReceiver != null && centerVideoScreen != null)
         {
-            _cameraReceiver.targetRawImage = null;
+            _cameraReceiver.targetRawImage = centerVideoScreen;
         }
 
         WireAllInteractiveButtons();
@@ -425,6 +425,20 @@ public class RescueRobotVRHUD : MonoBehaviour
         }
 
         ApplyHudDensityVisuals();
+
+        // Feed live robot camera texture to center FPV visor screen
+        if (centerVideoScreen != null && _cameraReceiver != null)
+        {
+            if (_cameraReceiver.targetRawImage != centerVideoScreen)
+            {
+                _cameraReceiver.targetRawImage = centerVideoScreen;
+            }
+            if (_cameraReceiver.VideoTexture != null && centerVideoScreen.texture != _cameraReceiver.VideoTexture)
+            {
+                centerVideoScreen.texture = _cameraReceiver.VideoTexture;
+                centerVideoScreen.color = Color.white;
+            }
+        }
 
         if (_teleop != null)
         {

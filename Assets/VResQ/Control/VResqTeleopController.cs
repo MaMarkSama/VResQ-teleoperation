@@ -66,6 +66,7 @@ namespace VResQ.Control
 
         private float _lastSendTime = 0f;
         private bool _wasMoving = false;
+        private int _lastSentServoDeg = 90;
         private float _servoFloatDeg = 90f;
         private float _cameraLookYaw = 0f;
         private float _cameraLookPitch = 0f;
@@ -89,6 +90,14 @@ namespace VResQ.Control
             if (VResqFrameworkConfig.Instance != null)
             {
                 VResqFrameworkConfig.Instance.OnConfigChanged.AddListener(SyncFromConfig);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (VResqFrameworkConfig.Instance != null)
+            {
+                VResqFrameworkConfig.Instance.OnConfigChanged.RemoveListener(SyncFromConfig);
             }
         }
 
@@ -499,19 +508,31 @@ namespace VResQ.Control
             if (VResqClient.Instance != null && VResqClient.Instance.IsConnected)
             {
                 bool isMoving = (Mathf.Abs(linear) > 0.01f || Mathf.Abs(angular) > 0.01f || buzzer || estop);
-                if (Time.realtimeSinceStartup - _lastSendTime >= (1.0f / commandRateHz) || (_wasMoving && !isMoving) || estop)
-                {
-                    _lastSendTime = Time.realtimeSinceStartup;
-                    _wasMoving = isMoving;
+                bool servoChanged = Mathf.Abs(currentServoDeg - _lastSentServoDeg) >= 2;
+                bool macroActive = VResqClient.Instance.LatestState != null &&
+                                   !string.IsNullOrEmpty(VResqClient.Instance.LatestState.active_action);
 
-                    VResqClient.Instance.SendDriveCommand(
-                        linear: linear,
-                        angular: angular,
-                        servo: currentServoDeg,
-                        speed: effectiveSpeedScale,
-                        estop: estop,
-                        buzzer: buzzer
-                    );
+                // Do not spam zero commands over an active macro unless the operator moves the stick or triggers E-STOP
+                if (!macroActive || isMoving || estop)
+                {
+                    float now = Time.realtimeSinceStartup;
+                    bool shouldSendActive = (isMoving || servoChanged) && (now - _lastSendTime >= (1.0f / commandRateHz));
+                    bool shouldSendStopOnce = (_wasMoving && !isMoving);
+                    if (shouldSendActive || shouldSendStopOnce || estop)
+                    {
+                        _lastSendTime = now;
+                        _wasMoving = isMoving;
+                        _lastSentServoDeg = currentServoDeg;
+
+                        VResqClient.Instance.SendDriveCommand(
+                            linear: linear,
+                            angular: -angular,
+                            servo: currentServoDeg,
+                            speed: effectiveSpeedScale,
+                            estop: estop,
+                            buzzer: buzzer
+                        );
+                    }
                 }
             }
         }
@@ -526,7 +547,10 @@ namespace VResQ.Control
         public void CycleNextFleetNode()
         {
             if (VResqClient.Instance == null) return;
-            int next = (VResqClient.Instance.ActiveNodeIndex + 1) % 3;
+            int count = (VResqClient.Instance.fleetNodes != null && VResqClient.Instance.fleetNodes.Length > 0)
+                ? VResqClient.Instance.fleetNodes.Length
+                : 3;
+            int next = (VResqClient.Instance.ActiveNodeIndex + 1) % count;
             VResqClient.Instance.SwitchToNodeIndex(next);
         }
 

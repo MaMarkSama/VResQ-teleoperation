@@ -37,20 +37,20 @@ namespace VResQ.Core
         {
             new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "COMMANDER", ipAddress = "172.20.10.4", port = 8000 },
             new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "RELAY", ipAddress = "172.20.10.2", port = 8000 },
-            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "172.20.10.3", port = 8000 }
+            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "172.20.10.6", port = 8000 }
         };
         public int defaultNodeIndex = 0;
         public bool autoFallbackToOnlineNode = true;
         public float fleetProbeIntervalSec = 2.5f;
 
-        // 2. Surround Panoramic Camera vs External World View (NO flat screen)
-        public SurroundViewMode viewMode = SurroundViewMode.Surround360;
+        // 2. Surround Panoramic Camera vs External World View + Center Robot Monitor
+        public SurroundViewMode viewMode = SurroundViewMode.ExternalWorld;
         public float surroundRadius = 2.8f;
         public float surroundHeight = 2.8f;
         public float surroundArcAngle = 360f;
         public float surroundVerticalOffset = 0.0f;
-        public bool showCenterMonitorInSurround = false;
-        public float centerMonitorOpacityInSurround = 0.0f;
+        public bool showCenterMonitorInSurround = true;
+        public float centerMonitorOpacityInSurround = 1.0f;
 
         // 3. HUD Ergonomics & Visual Theme
         public CockpitTheme theme = CockpitTheme.CyberCyan;
@@ -140,13 +140,14 @@ namespace VResQ.Core
                 Debug.LogWarning($"[VResqConfig] Could not load profile: {ex.Message}");
             }
 
-            if (Profile.fleetNodes == null || Profile.fleetNodes.Length < 3)
+            if (Profile.fleetNodes == null || Profile.fleetNodes.Length < 3 ||
+                (Profile.fleetNodes.Length > 0 && Profile.fleetNodes[0].ipAddress.StartsWith("10.66.")))
             {
                 Profile.fleetNodes = new RobotNodeEndpoint[]
                 {
-                    new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "LEADER", ipAddress = "10.66.68.52", port = 8000 },
-                    new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "WINGMAN", ipAddress = "10.66.68.10", port = 8000 },
-                    new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "10.66.68.82", port = 8000 }
+                    new RobotNodeEndpoint { displayName = "NODE ZERO", roleLabel = "COMMANDER", ipAddress = "172.20.10.4", port = 8000 },
+                    new RobotNodeEndpoint { displayName = "NODE ONE", roleLabel = "RELAY", ipAddress = "172.20.10.2", port = 8000 },
+                    new RobotNodeEndpoint { displayName = "NODE TWO", roleLabel = "SCOUT", ipAddress = "172.20.10.6", port = 8000 }
                 };
             }
 

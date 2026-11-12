@@ -143,8 +143,7 @@ namespace VResQ.Core
             if (_wsHeartbeatTimer >= 0.15f && _webSocket != null && _webSocket.State == WebSocketState.Open && (Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.14f))
             {
                 _wsHeartbeatTimer = 0f;
-                string pingJson = "{\"type\":\"ping\"}";
-                Task.Run(() => SendRawJsonAsync(pingJson));
+                _ = SendRawJsonAsync("{\"type\":\"ping\"}");
             }
         }
 
@@ -181,9 +180,10 @@ namespace VResQ.Core
         {
             _cts?.Cancel();
             _cts = new CancellationTokenSource();
+            var token = _cts.Token;
             string ip = robotIp;
             int p = port;
-            Task.Run(() => WebSocketLoopAsync(ip, p, _cts.Token));
+            Task.Run(() => WebSocketLoopAsync(ip, p, token));
         }
 
         public void Disconnect()
@@ -217,7 +217,7 @@ namespace VResQ.Core
             }
             else
             {
-                string[] fallbackIps = { "10.66.68.52", "10.66.68.10", "10.66.68.82" };
+                string[] fallbackIps = { "172.20.10.4", "172.20.10.2", "172.20.10.6" };
                 if (index >= 0 && index < fallbackIps.Length)
                 {
                     activeNodeIndex = index;
@@ -261,13 +261,17 @@ namespace VResQ.Core
             });
         }
 
+        private int _controlSequence = 0;
+
         public void SendDriveCommand(float linear, float angular, int servo = 90, float speed = 0.7f, bool estop = false, bool buzzer = false)
         {
             if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
 
+            _controlSequence++;
             // Serialize on Unity Main Thread
             var payload = new ControlPayload
             {
+                sequence = _controlSequence,
                 linear = Mathf.Clamp(linear, -1f, 1f),
                 angular = Mathf.Clamp(angular, -1f, 1f),
                 servo = Mathf.Clamp(servo, 0, 180),
@@ -277,7 +281,21 @@ namespace VResQ.Core
             };
 
             string json = payload.ToJson();
-            Task.Run(() => SendRawJsonAsync(json));
+            _ = SendRawJsonAsync(json);
+        }
+
+        public void ResetEstop()
+        {
+            string json = "{\"type\":\"estop_reset\"}";
+            if (_webSocket != null && _webSocket.State == WebSocketState.Open)
+            {
+                _ = SendRawJsonAsync(json);
+            }
+            string url = $"http://{robotIp}:{port}/api/estop/reset";
+            Task.Run(async () =>
+            {
+                try { await _httpClient.PostAsync(url, new StringContent("")); } catch { }
+            });
         }
 
         public void SendActionCommand(string action)
@@ -290,7 +308,7 @@ namespace VResQ.Core
                 // Serialize on Unity Main Thread
                 var payload = new ActionPayload { action = action };
                 string json = payload.ToJson();
-                Task.Run(() => SendRawJsonAsync(json));
+                _ = SendRawJsonAsync(json);
             }
             else
             {
@@ -308,7 +326,7 @@ namespace VResQ.Core
             string json = $"{{\"type\":\"oled\",\"page\":{safePage}}}";
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
             {
-                Task.Run(() => SendRawJsonAsync(json));
+                _ = SendRawJsonAsync(json);
             }
             string url = $"http://{robotIp}:{port}/api/oled/{safePage}";
             Task.Run(async () =>
@@ -343,11 +361,12 @@ namespace VResQ.Core
         {
             while (!token.IsCancellationRequested)
             {
+                ClientWebSocket ws = null;
                 try
                 {
                     string wsUrl = $"ws://{targetIp}:{targetPort}/ws";
 
-                    var ws = new ClientWebSocket();
+                    ws = new ClientWebSocket();
                     ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
                     _webSocket = ws;
 
@@ -363,9 +382,9 @@ namespace VResQ.Core
                         Debug.Log($"<color=green>[VResQ]</color> WebSocket CONNECTED to {targetIp}:{targetPort}!");
                     });
 
-                    // Send initial control packet so FastAPI /ws immediately responds with state
-                    string initMsg = "{\"type\":\"control\",\"linear\":0,\"angular\":0,\"servo\":90,\"speed\":0.75,\"estop\":false,\"buzzer\":false}";
-                    await SendRawJsonAsync(initMsg);
+                    // Acquire lease & send initial packet so FastAPI /ws immediately responds with state
+                    await SendRawJsonAsync("{\"type\":\"lease\",\"duration_s\":2.0}");
+                    await SendRawJsonAsync("{\"type\":\"control\",\"sequence\":1,\"linear\":0,\"angular\":0,\"servo\":90,\"speed\":0.75,\"estop\":false,\"buzzer\":false}");
 
                     byte[] buffer = new byte[32768];
                     var ms = new MemoryStream();
@@ -404,10 +423,13 @@ namespace VResQ.Core
                 }
                 finally
                 {
-                    if (_webSocket != null)
+                    if (ws != null)
                     {
-                        try { _webSocket.Dispose(); } catch { }
-                        _webSocket = null;
+                        try { ws.Dispose(); } catch { }
+                        if (ReferenceEquals(_webSocket, ws))
+                        {
+                            _webSocket = null;
+                        }
                     }
                 }
 
@@ -597,9 +619,8 @@ namespace VResQ.Core
                     }
                 }
 
-                // If current node is offline, auto-failover to the best online node
-                // (preferring online nodes with active camera/AI detectorFps > 0 like 10.66.68.82)
-                if (!currentOnline && (cfg.Profile.autoFallbackToOnlineNode || initialStartup))
+                // Only auto-failover if not currently connected over WebSocket (prevents switching robots mid-drive)
+                if (!currentOnline && !isConnected && (cfg.Profile.autoFallbackToOnlineNode || initialStartup))
                 {
                     int bestIdx = -1;
                     for (int i = 0; i < nodes.Length; i++)
