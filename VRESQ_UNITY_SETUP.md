@@ -23,17 +23,20 @@ The Windows build uses Mono and restores the prior scripting backend afterward.
 | Tactical_VR_HUD_Root | VResqFrameworkConfig, VResqAutoDiscovery, VResqClient |
 | Tactical_VR_HUD_Root | VResqCameraReceiver, VResqSurroundDisplay, VResqTeleopController, TacticalHUDFollow, RescueRobotVRHUD |
 | Tactical_VR_HUD_Root | VResqPresentationControls, linked to the two toggles, brightness slider, reset button and data status |
-| Main XR Camera | Existing Camera and XR tracking components. Auto Setup assigns this camera to Canvas, surround and HUD follow |
+| VResQ XR Hands Rig | Imported hands rig with left/right near and far interaction, controller fallback and tracked headset camera |
+| Main XR Camera | ARCameraManager, transparent clear color, XR tracking. Assigned to Canvas, surround and HUD follow |
+| VResQ AR Session | ARSession for the Meta OpenXR camera subsystem |
 | Center_Robot_Camera_Screen | RawImage assigned to camera receiver and HUD. PresentationControls supplies the camera shader |
 | External_3D_World_Environment | Scene environment root assigned to SurroundDisplay |
-| EventSystem | Existing input module retained. A missing input module is filled with XRUIInputModule |
+| EventSystem | One enabled EventSystem with XRUIInputModule, XR and mouse input enabled |
 
 ## Runtime Controls
 
-The VR background toggle controls the rendered environment and panoramic camera
-background. Switching it off selects a black background. The Robot monitor toggle
-controls the center camera image. Brightness ranges from 0.5 to 2, starting at 1.2.
+Headset view controls passthrough from the Quest headset cameras. Robot monitor
+controls the center robot image. Next camera selects a source manually, and Auto
+camera restores discovery. Brightness ranges from 0.5 to 2, starting at 1.2.
 Use the existing Save Profile action to persist these choices.
+See QUEST_LINK_SETUP.md for required Meta Horizon Link Developer settings.
 
 Brightness is applied on the GPU for display. Original JPEG bytes and telemetry
 remain available for parsing and recording.
@@ -67,7 +70,8 @@ Physical XR input and live-camera performance need a headset and connected robot
 
 ## Verification Notes
 
-The latest Windows build completed successfully with 28 regression checks.
+The Quest Link Windows build completed successfully with camera and XR interaction
+regression checks, including hand rig wiring and UI pointer raycasts.
 The Unity build log still includes package warnings about AR Foundation simulation
 asset relocation and missing Thai glyphs in the existing LiberationSans font.
 Unity also serializes XR and URP settings while building.

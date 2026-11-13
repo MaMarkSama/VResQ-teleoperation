@@ -215,6 +215,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         foreach (var b in buttons)
         {
             string n = b.name.ToUpperInvariant();
+            if (!n.StartsWith("BTN_") && !n.StartsWith("CFG_")) continue;
             b.onClick.RemoveAllListeners();
 
             if (n.Contains("BTN_NODE_0")) b.onClick.AddListener(() => SelectFleetNode(0));
@@ -463,6 +464,8 @@ public class RescueRobotVRHUD : MonoBehaviour
                 SurroundViewMode.Surround180 => $"🎥 VIEW: 180° DOME CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
                 _ => $"🎥 VIEW: SURROUND CAM [Y/V]{modeHint}"
             };
+            if (_config != null && _config.Profile.headsetPassthrough)
+                viewModeBadgeText.text = "HEADSET PASSTHROUGH";
         }
 
         ApplyHudDensityVisuals();

@@ -2,6 +2,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using VResQ.Core;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.Hands;
+using System.Collections.Generic;
 
 namespace VResQ.Video
 {
@@ -14,6 +17,8 @@ namespace VResQ.Video
         public TextMeshProUGUI statusText;
         public Shader cameraShader;
         public Button resetDiagnostics;
+        public Button nextCameraButton;
+        public Button autoCameraButton;
         private Material material;
         private VResqFrameworkConfig config;
         private VResqCameraReceiver receiver;
@@ -21,6 +26,7 @@ namespace VResQ.Video
         private Camera viewCamera;
         private CameraClearFlags originalClearFlags;
         private Color originalBackground;
+        private readonly List<XRHandSubsystem> handSubsystems = new List<XRHandSubsystem>();
 
         private void OnEnable()
         {
@@ -31,6 +37,8 @@ namespace VResQ.Video
             if (monitorToggle != null) monitorToggle.onValueChanged.AddListener(SetMonitor);
             if (brightnessSlider != null) brightnessSlider.onValueChanged.AddListener(SetBrightness);
             if (resetDiagnostics != null) resetDiagnostics.onClick.AddListener(receiver.ResetDiagnostics);
+            if (nextCameraButton != null) nextCameraButton.onClick.AddListener(receiver.CycleCameraSource);
+            if (autoCameraButton != null) autoCameraButton.onClick.AddListener(receiver.EnableAutomaticCameraSelection);
             Apply();
         }
 
@@ -41,6 +49,8 @@ namespace VResQ.Video
             if (monitorToggle != null) monitorToggle.onValueChanged.RemoveListener(SetMonitor);
             if (brightnessSlider != null) brightnessSlider.onValueChanged.RemoveListener(SetBrightness);
             if (resetDiagnostics != null) resetDiagnostics.onClick.RemoveListener(receiver.ResetDiagnostics);
+            if (nextCameraButton != null) nextCameraButton.onClick.RemoveListener(receiver.CycleCameraSource);
+            if (autoCameraButton != null) autoCameraButton.onClick.RemoveListener(receiver.EnableAutomaticCameraSelection);
             if (viewCamera != null)
             {
                 viewCamera.clearFlags = originalClearFlags;
@@ -50,12 +60,7 @@ namespace VResQ.Video
 
         public void SetBackground(bool enabled)
         {
-            config.Profile.backgroundVisible = enabled;
-            if (enabled)
-            {
-                var surround = GetComponent<VResqSurroundDisplay>();
-                surround.SetViewMode(surround.lastCameraSurroundMode);
-            }
+            config.Profile.headsetPassthrough = enabled;
             config.NotifyConfigChanged();
         }
         public void SetMonitor(bool enabled) { config.Profile.robotMonitorVisible = enabled; config.NotifyConfigChanged(); }
@@ -73,10 +78,12 @@ namespace VResQ.Video
             }
             if (viewCamera != null)
             {
-                viewCamera.clearFlags = profile.backgroundVisible ? originalClearFlags : CameraClearFlags.SolidColor;
-                viewCamera.backgroundColor = profile.backgroundVisible ? originalBackground : Color.black;
+                viewCamera.clearFlags = CameraClearFlags.SolidColor;
+                viewCamera.backgroundColor = profile.headsetPassthrough ? Color.clear : Color.black;
+                var passthrough = viewCamera.GetComponent<ARCameraManager>();
+                if (passthrough != null) passthrough.enabled = profile.headsetPassthrough;
             }
-            if (backgroundToggle != null) backgroundToggle.SetIsOnWithoutNotify(profile.backgroundVisible);
+            if (backgroundToggle != null) backgroundToggle.SetIsOnWithoutNotify(profile.headsetPassthrough);
             if (monitorToggle != null) monitorToggle.SetIsOnWithoutNotify(profile.robotMonitorVisible);
             if (brightnessSlider != null) brightnessSlider.SetValueWithoutNotify(profile.cameraBrightness);
             if (receiver.targetRawImage != null)
@@ -102,8 +109,14 @@ namespace VResQ.Video
             var client = GetComponent<VResqClient>();
             string quality = !string.IsNullOrEmpty(receiver.LastDataError) ? receiver.LastDataError :
                 client != null && !string.IsNullOrEmpty(client.LastTelemetryError) ? client.LastTelemetryError : "OK";
-            statusText.text = $"{receiver.FrameSyncStatus} | {quality} | Rejected {receiver.RejectedFrames}\n" +
-                (frame == null ? "Frame --" : $"{frame.frame_id} | {frame.timestamp_source}");
+            var passthrough = viewCamera != null ? viewCamera.GetComponent<ARCameraManager>() : null;
+            string headset = !config.Profile.headsetPassthrough ? "Headset view OFF" :
+                passthrough != null && passthrough.subsystem != null && passthrough.subsystem.running ? "Headset view ON" : "Headset view waiting for Link";
+            SubsystemManager.GetSubsystems(handSubsystems);
+            var hands = handSubsystems.Find(system => system.running);
+            string left = hands != null && hands.leftHand.isTracked ? "tracked" : "--";
+            string right = hands != null && hands.rightHand.isTracked ? "tracked" : "--";
+            statusText.text = $"{(receiver.AutomaticCameraSelection ? "AUTO" : "MANUAL")} {receiver.ActiveCameraSourceIp} | {quality}\n{headset}\nHands L {left} / R {right}";
         }
 
         private void OnDestroy()

@@ -28,6 +28,7 @@ public static class VResqAutoSetup
         }
         GameObject root = hud.gameObject;
         var config = Ensure<VResqFrameworkConfig>(root);
+        VResqXRSetup.ConfigureRig(root);
         Ensure<VResqAutoDiscovery>(root);
         Ensure<VResqClient>(root);
         var receiver = Ensure<VResqCameraReceiver>(root);
@@ -59,6 +60,8 @@ public static class VResqAutoSetup
         {
             canvas.worldCamera = Camera.main;
             follow.targetCamera = Camera.main.transform;
+            follow.SyncFromConfig();
+            follow.ResetHUDOrientation();
             surround.targetCamera = Camera.main.transform;
             controller.cameraRigTransform = Camera.main.transform.parent ?? Camera.main.transform;
         }
@@ -67,7 +70,7 @@ public static class VResqAutoSetup
         if (old != null) Undo.DestroyObjectImmediate(old.gameObject);
         var panel = Rect("Video_Data_Controls", root.transform, new Vector2(0, -580), new Vector2(1740, 84));
         panel.gameObject.AddComponent<Image>().color = new Color(.02f, .055f, .08f, .97f);
-        presentation.backgroundToggle = MakeToggle(panel, "VR background", -730);
+        presentation.backgroundToggle = MakeToggle(panel, "Headset view", -730);
         presentation.monitorToggle = MakeToggle(panel, "Robot monitor", -470);
         Label(panel, "Brightness", new Vector2(-235, 0), new Vector2(130, 32));
         var sliderRect = Rect("Brightness", panel, new Vector2(-50, 0), new Vector2(220, 30));
@@ -83,7 +86,9 @@ public static class VResqAutoSetup
         slider.targetGraphic = handleImage;
         slider.value = config.Profile.cameraBrightness;
         presentation.brightnessSlider = slider;
-        presentation.statusText = Label(panel, "Frame -- | Telemetry waiting", new Vector2(400, 0), new Vector2(660, 66));
+        presentation.nextCameraButton = MakeButton(panel, "Next camera", 130);
+        presentation.autoCameraButton = MakeButton(panel, "Auto camera", 265);
+        presentation.statusText = Label(panel, "Camera waiting | Headset view waiting", new Vector2(510, 0), new Vector2(350, 66));
         presentation.statusText.fontSize = 14;
         var reset = Rect("Reset diagnostics", panel, new Vector2(790, 0), new Vector2(130, 36));
         var resetImage = reset.gameObject.AddComponent<Image>();
@@ -91,7 +96,7 @@ public static class VResqAutoSetup
         presentation.resetDiagnostics = reset.gameObject.AddComponent<Button>();
         presentation.resetDiagnostics.targetGraphic = resetImage;
         Label(reset, "Reset counters", Vector2.zero, new Vector2(120, 32)).fontSize = 14;
-        presentation.backgroundToggle.SetIsOnWithoutNotify(config.Profile.backgroundVisible);
+        presentation.backgroundToggle.SetIsOnWithoutNotify(config.Profile.headsetPassthrough);
         presentation.monitorToggle.SetIsOnWithoutNotify(config.Profile.robotMonitorVisible);
         EditorUtility.SetDirty(presentation);
         EditorUtility.SetDirty(receiver);
@@ -189,5 +194,16 @@ public static class VResqAutoSetup
         toggle.targetGraphic = box;
         toggle.graphic = mark;
         return toggle;
+    }
+
+    private static Button MakeButton(Transform parent, string name, float x)
+    {
+        var rect = Rect(name, parent, new Vector2(x, 0), new Vector2(130, 36));
+        var image = rect.gameObject.AddComponent<Image>();
+        image.color = new Color(.08f, .25f, .28f);
+        var button = rect.gameObject.AddComponent<Button>();
+        button.targetGraphic = image;
+        Label(rect, name, Vector2.zero, new Vector2(120, 32)).fontSize = 14;
+        return button;
     }
 }

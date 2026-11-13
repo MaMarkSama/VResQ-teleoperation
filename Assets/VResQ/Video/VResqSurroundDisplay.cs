@@ -289,6 +289,8 @@ namespace VResQ.Video
             if (cfg != null)
             {
                 cfg.Profile.viewMode = currentViewMode;
+                cfg.Profile.headsetPassthrough = mode == SurroundViewMode.ExternalWorld;
+                cfg.Profile.backgroundVisible = mode != SurroundViewMode.ExternalWorld;
                 if (mode != SurroundViewMode.ExternalWorld)
                 {
                     cfg.Profile.surroundArcAngle = arcAngle;
@@ -306,7 +308,7 @@ namespace VResQ.Video
             EnsureSurroundScreenReady(forceRebuildMesh: false);
             if (_screenObject == null) return;
             var config = VResqFrameworkConfig.Instance;
-            bool visible = config == null || config.Profile.backgroundVisible;
+            bool visible = config == null || (config.Profile.backgroundVisible && !config.Profile.headsetPassthrough);
             if (externalWorldRoot != null)
                 externalWorldRoot.SetActive(visible && currentViewMode == SurroundViewMode.ExternalWorld);
 

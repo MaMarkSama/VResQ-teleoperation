@@ -51,6 +51,7 @@ namespace VResQ.Core
         public float surroundVerticalOffset = 0.0f;
         public bool showCenterMonitorInSurround = true;
         public bool backgroundVisible = true;
+        public bool headsetPassthrough = true;
         public bool robotMonitorVisible = true;
         public float cameraBrightness = 1.2f;
         public float centerMonitorOpacityInSurround = 1.0f;

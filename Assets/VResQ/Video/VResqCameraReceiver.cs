@@ -69,6 +69,44 @@ namespace VResQ.Video
 
         private string _preferredIp = "192.168.1.138";
         private int _preferredPort = 8000;
+        private bool _automaticCameraSelection = true;
+        public bool AutomaticCameraSelection => _automaticCameraSelection;
+
+        public void SelectCameraSource(string ip, int port = 8000)
+        {
+            if (string.IsNullOrWhiteSpace(ip) || port < 1 || port > 65535) return;
+            _automaticCameraSelection = false;
+            _preferredIp = ip;
+            _preferredPort = port;
+            StartStream();
+        }
+
+        public void CycleCameraSource()
+        {
+            var config = VResqFrameworkConfig.Instance;
+            var nodes = config != null ? config.Profile.fleetNodes : null;
+            if (nodes == null || nodes.Length == 0) return;
+            string selected = _automaticCameraSelection ? DisplayedSourceIp : _preferredIp;
+            int index = Array.FindIndex(nodes, node => node != null && node.ipAddress == selected);
+            for (int step = 1; step <= nodes.Length; step++)
+            {
+                var next = nodes[(index + step + nodes.Length) % nodes.Length];
+                if (next == null || string.IsNullOrWhiteSpace(next.ipAddress)) continue;
+                SelectCameraSource(next.ipAddress, next.port);
+                return;
+            }
+        }
+
+        public void EnableAutomaticCameraSelection()
+        {
+            _automaticCameraSelection = true;
+            if (VResqClient.Instance != null)
+            {
+                _preferredIp = VResqClient.Instance.robotIp;
+                _preferredPort = VResqClient.Instance.port;
+            }
+            StartStream();
+        }
         private int _fpsCounter = 0;
         private float _fpsTimer = 0f;
 
@@ -145,6 +183,7 @@ namespace VResQ.Video
 
         private void OnRobotSwitched(string newIp)
         {
+            if (!_automaticCameraSelection) return;
             int newPort = VResqClient.Instance != null ? VResqClient.Instance.port : 8000;
             if (!string.IsNullOrEmpty(newIp) && (newIp != _preferredIp || newPort != _preferredPort))
             {
@@ -252,7 +291,7 @@ namespace VResQ.Video
             string prefIp = _preferredIp;
             int prefPort = _preferredPort;
             // Snapshot Unity configuration on the main thread before starting network work.
-            string[] candidates = BuildCandidateIpOrder(prefIp);
+            string[] candidates = _automaticCameraSelection ? BuildCandidateIpOrder(prefIp) : new[] { prefIp };
             Task.Run(() => StreamMasterLoopAsync(candidates, prefPort, token));
         }
 
