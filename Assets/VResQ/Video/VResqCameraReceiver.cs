@@ -65,6 +65,7 @@ namespace VResQ.Video
         public string DisplayedSourceIp { get; private set; }
         private readonly object _frameLock = new object();
         private bool _hasNewFrame = false;
+        private volatile string _rejectedSourceIp;
 
         private string _preferredIp = "192.168.1.138";
         private int _preferredPort = 8000;
@@ -207,11 +208,13 @@ namespace VResQ.Video
                     RejectedFrames++;
                     lastRejectedMetadata = metadataJson;
                     LastDataError = error.Message;
+                    _rejectedSourceIp = sourceIp;
                     hasReceivedLiveFrame = false;
                     return false;
                 }
                 if (_videoTexture.LoadImage(frameToLoad))
                 {
+                    ApplyTextureToTargets(_videoTexture);
                     DisplayedMetadata = metadata;
                     DisplayedSourceIp = sourceIp;
                     RawFrameMetadata = metadataJson;
@@ -343,6 +346,7 @@ namespace VResQ.Video
         private async Task<int> StreamSingleNodeTcpAsync(string ip, int port, CancellationToken token)
         {
             int decodedFrames = 0;
+            if (_rejectedSourceIp == ip) _rejectedSourceIp = null;
             using (var tcp = new TcpClient())
             using (token.Register(() => tcp.Close()))
             {
@@ -361,6 +365,7 @@ namespace VResQ.Video
                         var reader = new VResqMjpegReader(stream);
                         while (!token.IsCancellationRequested)
                         {
+                            if (_rejectedSourceIp == ip) return 0;
                             var read = reader.ReadAsync(token);
                             if (await Task.WhenAny(read, Task.Delay(3500, token)) != read)
                             {
@@ -407,6 +412,7 @@ namespace VResQ.Video
             if (targetRawImage != null)
             {
                 targetRawImage.texture = tex;
+                targetRawImage.color = Color.white;
             }
             if (targetRenderer != null && targetRenderer.sharedMaterial != null)
             {

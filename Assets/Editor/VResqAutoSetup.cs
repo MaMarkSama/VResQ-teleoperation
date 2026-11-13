@@ -112,6 +112,25 @@ public static class VResqAutoSetup
         }
     }
 
+    public static void RecoverVideoAndBuild()
+    {
+        BuildConfiguredScenes();
+        foreach (string path in new[] { "Assets/Scenes/BasicScene.unity", "Assets/Scenes/SampleScene.unity" })
+        {
+            if (!System.IO.File.Exists(path)) continue;
+            EditorSceneManager.OpenScene(path);
+            var config = UnityEngine.Object.FindFirstObjectByType<VResqFrameworkConfig>();
+            config.Profile.backgroundVisible = true;
+            config.Profile.robotMonitorVisible = true;
+            config.Profile.viewMode = SurroundViewMode.Surround360;
+            config.NotifyConfigChanged();
+            EditorSceneManager.MarkSceneDirty(config.gameObject.scene);
+            EditorSceneManager.SaveScene(config.gameObject.scene);
+        }
+        VResqVideoRecoveryChecks.VerifyLiveCamera();
+        BuildWindows();
+    }
+
     [MenuItem("V-ResQ/Auto Build Windows Operator", false, 4)]
     public static void BuildWindows()
     {

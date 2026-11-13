@@ -141,6 +141,12 @@ namespace VResQ.Video
                     _meshFilter = _screenObject.AddComponent<MeshFilter>();
                 }
             }
+            // The HUD canvas uses millimetre-scale units; the panorama dimensions are metres.
+            Vector3 parentScale = transform.lossyScale;
+            _screenObject.transform.localScale = new Vector3(
+                1f / Mathf.Max(Mathf.Abs(parentScale.x), 0.000001f),
+                1f / Mathf.Max(Mathf.Abs(parentScale.y), 0.000001f),
+                1f / Mathf.Max(Mathf.Abs(parentScale.z), 0.000001f));
             if (_meshRenderer == null)
             {
                 _meshRenderer = _screenObject.GetComponent<MeshRenderer>();

@@ -48,7 +48,16 @@ namespace VResQ.Video
             }
         }
 
-        public void SetBackground(bool enabled) { config.Profile.backgroundVisible = enabled; config.NotifyConfigChanged(); }
+        public void SetBackground(bool enabled)
+        {
+            config.Profile.backgroundVisible = enabled;
+            if (enabled)
+            {
+                var surround = GetComponent<VResqSurroundDisplay>();
+                surround.SetViewMode(surround.lastCameraSurroundMode);
+            }
+            config.NotifyConfigChanged();
+        }
         public void SetMonitor(bool enabled) { config.Profile.robotMonitorVisible = enabled; config.NotifyConfigChanged(); }
         public void SetBrightness(float value) { config.Profile.cameraBrightness = value; config.NotifyConfigChanged(); }
 
