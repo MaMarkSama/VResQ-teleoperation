@@ -13,13 +13,13 @@ namespace VResQ.Video
     /// <summary>
     /// Ultra-Low-Latency Raw TCP HTTP/1.0 MJPEG Camera Stream Receiver for V-ResQ Surround Cockpit.
     /// Sends HTTP/1.0 so uvicorn streams unchunked raw multipart/x-mixed-replace JPEG frames (SOI 0xFF 0xD8 .. EOI 0xFF 0xD9)
-    /// with zero HttpClient buffering. Automatically fails over to the active camera node (10.66.68.82) if a selected
+    /// with zero HttpClient buffering. Automatically fails over to another fleet camera if a selected
     /// node has no physical camera stream attached.
     /// </summary>
     public class VResqCameraReceiver : MonoBehaviour
     {
         [Header("Stream Target")]
-        public string streamUrl = "http://172.20.10.4:8000/video_feed";
+        public string streamUrl = "http://192.168.1.138:8000/video_feed";
 
         [Header("Optional Target Displays")]
         public RawImage targetRawImage;
@@ -34,7 +34,8 @@ namespace VResQ.Video
         public bool IsStreaming => isStreaming;
 
         [SerializeField] private bool hasReceivedLiveFrame = false;
-        public bool HasReceivedLiveFrame => hasReceivedLiveFrame;
+        public bool HasReceivedLiveFrame => hasReceivedLiveFrame && isStreaming && FrameAgeSeconds <= 2f;
+        public float FrameAgeSeconds => _lastFrameRealtime < 0f ? float.PositiveInfinity : Time.realtimeSinceStartup - _lastFrameRealtime;
 
         [SerializeField] private float currentFps = 0f;
         public float FPS => currentFps;
@@ -43,8 +44,9 @@ namespace VResQ.Video
         [SerializeField] private int framesReceived = 0;
         public int FramesReceived => framesReceived;
 
-        [SerializeField] private string activeCameraSourceIp = "172.20.10.4";
+        [SerializeField] private string activeCameraSourceIp = "192.168.1.138";
         public string ActiveCameraSourceIp => activeCameraSourceIp;
+        private float _lastFrameRealtime = -1f;
 
         private Texture2D _videoTexture;
         public Texture2D VideoTexture => _videoTexture;
@@ -54,7 +56,7 @@ namespace VResQ.Video
         private readonly object _frameLock = new object();
         private bool _hasNewFrame = false;
 
-        private string _preferredIp = "172.20.10.4";
+        private string _preferredIp = "192.168.1.138";
         private int _preferredPort = 8000;
         private int _fpsCounter = 0;
         private float _fpsTimer = 0f;
@@ -132,10 +134,11 @@ namespace VResQ.Video
 
         private void OnRobotSwitched(string newIp)
         {
-            if (!string.IsNullOrEmpty(newIp) && newIp != _preferredIp)
+            int newPort = VResqClient.Instance != null ? VResqClient.Instance.port : 8000;
+            if (!string.IsNullOrEmpty(newIp) && (newIp != _preferredIp || newPort != _preferredPort))
             {
                 _preferredIp = newIp;
-                _preferredPort = VResqClient.Instance != null ? VResqClient.Instance.port : 8000;
+                _preferredPort = newPort;
                 StartStream();
             }
         }
@@ -143,11 +146,6 @@ namespace VResQ.Video
         private void Update()
         {
             EnsureTextureCreated();
-
-            if (!isStreaming)
-            {
-                StartStream();
-            }
 
             if (targetRawImage != null && targetRawImage.texture != _videoTexture)
             {
@@ -184,6 +182,7 @@ namespace VResQ.Video
                 if (_videoTexture.LoadImage(frameToLoad))
                 {
                     hasReceivedLiveFrame = true;
+                    _lastFrameRealtime = Time.realtimeSinceStartup;
                     _fpsCounter++;
                     framesReceived++;
                     return true;
@@ -213,7 +212,9 @@ namespace VResQ.Video
             isStreaming = true;
             string prefIp = _preferredIp;
             int prefPort = _preferredPort;
-            Task.Run(() => StreamMasterLoopAsync(prefIp, prefPort, token));
+            // Snapshot Unity configuration on the main thread before starting network work.
+            string[] candidates = BuildCandidateIpOrder(prefIp);
+            Task.Run(() => StreamMasterLoopAsync(candidates, prefPort, token));
         }
 
         public void StopStream()
@@ -221,19 +222,27 @@ namespace VResQ.Video
             isStreaming = false;
             _cts?.Cancel();
             _cts = null;
+            hasReceivedLiveFrame = false;
+            _lastFrameRealtime = -1f;
+            currentFps = 0f;
+            _fpsCounter = 0;
+            lock (_frameLock)
+            {
+                _latestFrameBytes = null;
+                _hasNewFrame = false;
+            }
         }
 
         /// <summary>
         /// Connects to the preferred robot IP first; if that robot has no camera stream (0 JPEG frames within 2.0s),
-        /// automatically falls back to 10.66.68.82 -> 10.66.68.10 -> 10.66.68.52 so live video ALWAYS appears!
+        /// tries the remaining configured fleet endpoints and known LAN/hotspot addresses.
         /// </summary>
-        private async Task StreamMasterLoopAsync(string preferredIp, int preferredPort, CancellationToken token)
+        private async Task StreamMasterLoopAsync(string[] candidateIps, int preferredPort, CancellationToken token)
         {
             int candidateIdx = 0;
 
             while (!token.IsCancellationRequested)
             {
-                string[] candidateIps = BuildCandidateIpOrder(preferredIp);
                 string ip = candidateIps[candidateIdx % candidateIps.Length];
                 int port = preferredPort > 0 ? preferredPort : 8000;
                 activeCameraSourceIp = ip;
@@ -248,12 +257,14 @@ namespace VResQ.Video
                     // Current node didn't produce any JPEG frames (either offline or no physical camera plugged in),
                     // immediately try the next fleet node!
                     candidateIdx++;
-                    await Task.Delay(150, token);
+                    try { await Task.Delay(150, token); }
+                    catch (OperationCanceledException) { break; }
                 }
                 else
                 {
                     // Stream was working and disconnected; retry same node first
-                    await Task.Delay(300, token);
+                    try { await Task.Delay(300, token); }
+                    catch (OperationCanceledException) { break; }
                 }
             }
         }
@@ -280,7 +291,7 @@ namespace VResQ.Video
             }
 
             // Fallback list of known default nodes (including .6 hotspot DHCP)
-            string[] defaults = { "172.20.10.4", "172.20.10.6", "172.20.10.3", "172.20.10.2" };
+            string[] defaults = { "192.168.1.138", "192.168.1.122", "192.168.1.149", "172.20.10.4", "172.20.10.6", "172.20.10.3", "172.20.10.2" };
             foreach (var d in defaults)
             {
                 if (!candidates.Contains(d)) candidates.Add(d);
@@ -367,7 +378,10 @@ namespace VResQ.Video
                             int soi = FindMarker(workBuffer, workLen, 0xFF, 0xD8, 0);
                             if (soi < 0)
                             {
-                                workLen = 0;
+                                // SOI may be split across TCP reads.
+                                bool trailingFF = workLen > 0 && workBuffer[workLen - 1] == 0xFF;
+                                workLen = trailingFF ? 1 : 0;
+                                if (trailingFF) workBuffer[0] = 0xFF;
                                 break;
                             }
 
@@ -391,6 +405,7 @@ namespace VResQ.Video
 
                                 lock (_frameLock)
                                 {
+                                    if (token.IsCancellationRequested) return decodedFrames;
                                     _latestFrameBytes = jpegBytes;
                                     _hasNewFrame = true;
                                 }
@@ -405,8 +420,7 @@ namespace VResQ.Video
                             workLen = leftover;
                         }
 
-                        // If 2.2 seconds elapsed since connecting and 0 JPEG frames arrived (e.g. 10.66.68.10 header-only),
-                        // break out so StreamMasterLoopAsync switches to 10.66.68.82!
+                        // Move to the next candidate when this stream produces no JPEG frames.
                         if (decodedFrames == 0 && firstFrameWatch.ElapsedMilliseconds > 2200)
                         {
                             break;

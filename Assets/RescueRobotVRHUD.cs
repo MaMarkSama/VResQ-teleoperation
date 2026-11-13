@@ -138,6 +138,23 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void Start()
     {
+        if (latencyText != null)
+        {
+            latencyText.fontSize = 13f;
+            latencyText.textWrappingMode = TextWrappingModes.NoWrap;
+            latencyText.overflowMode = TextOverflowModes.Ellipsis;
+            latencyText.text = "RTT --  |  CAM WAITING\nSOURCE --";
+        }
+        if (robotIdText != null)
+        {
+            robotIdText.enableAutoSizing = true;
+            robotIdText.fontSizeMin = 12f;
+            robotIdText.fontSizeMax = 19f;
+            robotIdText.textWrappingMode = TextWrappingModes.NoWrap;
+            robotIdText.overflowMode = TextOverflowModes.Ellipsis;
+            robotIdText.text = "V-ResQ CONNECTING";
+        }
+        if (aiStatusBadgeText != null) aiStatusBadgeText.text = "AI: WAITING FOR TELEMETRY";
         if (VResqClient.Instance != null)
         {
             VResqClient.Instance.OnStateReceived.AddListener(OnRobotStateReceived);
@@ -515,9 +532,12 @@ public class RescueRobotVRHUD : MonoBehaviour
             float rtt = VResqClient.Instance.LatencyMs;
             float camFps = _cameraReceiver != null ? _cameraReceiver.StreamFps : 0f;
             int frames = _cameraReceiver != null ? _cameraReceiver.FramesReceived : 0;
-            string camStr = frames > 0 ? $"LIVE {Mathf.Max(1f, camFps):F0} FPS" : "CONNECTING...";
+            bool freshCamera = _cameraReceiver != null && _cameraReceiver.HasReceivedLiveFrame;
+            string camStr = freshCamera ? $"LIVE {camFps:F0} FPS" : (frames > 0 ? "STALE" : "CONNECTING...");
             string linkColor = rtt < 40f ? "#00FF88" : (rtt < 100f ? "#FFD166" : "#FF5566");
-            latencyText.text = $"<color={linkColor}>ONLINE {rtt:F0}ms</color>  |  CAM: <color=#00F0FF>{camStr}</color>";
+            string rttText = rtt >= 0f ? $"{rtt:F0}ms" : "--";
+            string cameraSource = _cameraReceiver != null ? _cameraReceiver.ActiveCameraSourceIp : "--";
+            latencyText.text = $"<color={linkColor}>ONLINE {rttText}</color>  |  CAM: <color=#00F0FF>{camStr}</color>\nSOURCE {cameraSource}";
             latencyText.color = new Color(0f, 1f, 0.5f, 1f);
         }
 

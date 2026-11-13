@@ -41,7 +41,7 @@ namespace VResQ.Core
         [SerializeField] private int activeNodeIndex = 0;
         public int ActiveNodeIndex => activeNodeIndex;
 
-        [SerializeField] private float latencyMs = 18f;
+        [SerializeField] private float latencyMs = -1f;
         public float LatencyMs => latencyMs;
 
         [Header("Swarm Mesh Telemetry")]
@@ -72,6 +72,10 @@ namespace VResQ.Core
         private float _lastStateReceivedRealtime = 0f;
         private bool _probingFleet = false;
         private bool _pollingStateHttp = false;
+        private float _leaseTimer;
+        private volatile bool _authenticated;
+        private int _connectionGeneration;
+        private string _operatorToken;
 
         private void Awake()
         {
@@ -123,6 +127,16 @@ namespace VResQ.Core
         private void Update()
         {
             PumpMainThreadQueue();
+            if (isConnected && _lastStateReceivedRealtime > 0f &&
+                Time.realtimeSinceStartup - _lastStateReceivedRealtime > 3f)
+                SetConnected(false);
+
+            _leaseTimer += Time.unscaledDeltaTime;
+            if (_authenticated && _leaseTimer >= 0.3f)
+            {
+                _leaseTimer = 0f;
+                _ = SendRawJsonAsync("{\"type\":\"renew\",\"ttl_s\":0.75}");
+            }
 
             // 1. Periodic Swarm API Poll every 2.5 seconds
             _swarmPollTimer += Time.deltaTime;
@@ -142,7 +156,8 @@ namespace VResQ.Core
 
             // 3. HTTP /api/state poll every 0.25s if WebSocket hasn't pushed state recently
             _stateFallbackPollTimer += Time.deltaTime;
-            if (_stateFallbackPollTimer >= 0.25f && !_pollingStateHttp && (Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.20f))
+            if (!_pollingStateHttp && (_stateFallbackPollTimer >= 2f ||
+                (_stateFallbackPollTimer >= 0.25f && Time.realtimeSinceStartup - _lastStateReceivedRealtime > 0.20f)))
             {
                 _stateFallbackPollTimer = 0f;
                 _ = PollStateFallbackAsync();
@@ -184,12 +199,14 @@ namespace VResQ.Core
         private void OnDestroy()
         {
             Disconnect();
+            if (Instance == this) Instance = null;
         }
 
         public void Connect()
         {
-            _cts?.Cancel();
+            Disconnect();
             _cts = new CancellationTokenSource();
+            _operatorToken = Environment.GetEnvironmentVariable("VRESQ_OPERATOR_TOKEN") ?? "";
             var token = _cts.Token;
             string ip = robotIp;
             int p = port;
@@ -198,6 +215,8 @@ namespace VResQ.Core
 
         public void Disconnect()
         {
+            _connectionGeneration++;
+            _authenticated = false;
             _cts?.Cancel();
             if (_webSocket != null)
             {
@@ -275,7 +294,7 @@ namespace VResQ.Core
 
         public void SendDriveCommand(float linear, float angular, int servo = 90, float speed = 0.7f, bool estop = false, bool buzzer = false)
         {
-            if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+            if (!_authenticated || _webSocket == null || _webSocket.State != WebSocketState.Open) return;
 
             _controlSequence++;
             // Serialize on Unity Main Thread
@@ -347,17 +366,23 @@ namespace VResQ.Core
 
         private async Task SendRawJsonAsync(string json)
         {
-            if (_webSocket == null || _webSocket.State != WebSocketState.Open) return;
+            ClientWebSocket socket = _webSocket;
+            CancellationToken token = _cts != null ? _cts.Token : CancellationToken.None;
+            if (socket == null || socket.State != WebSocketState.Open) return;
 
             bool locked = false;
             try
             {
-                await _wsSendLock.WaitAsync(500);
-                locked = true;
-                if (_webSocket != null && _webSocket.State == WebSocketState.Open)
+                locked = await _wsSendLock.WaitAsync(150, token);
+                if (!locked) return;
+                if (!token.IsCancellationRequested && ReferenceEquals(_webSocket, socket) && socket.State == WebSocketState.Open)
                 {
                     byte[] bytes = Encoding.UTF8.GetBytes(json);
-                    await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                    using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token))
+                    {
+                        deadline.CancelAfter(500);
+                        await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, deadline.Token);
+                    }
                 }
             }
             catch { }
@@ -378,6 +403,9 @@ namespace VResQ.Core
 
                     ws = new ClientWebSocket();
                     ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+                    if (!string.IsNullOrEmpty(_operatorToken))
+                        ws.Options.SetRequestHeader("X-VResQ-Token", _operatorToken);
+                    token.ThrowIfCancellationRequested();
                     _webSocket = ws;
 
                     using (var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2.5f)))
@@ -386,15 +414,12 @@ namespace VResQ.Core
                         await ws.ConnectAsync(new Uri(wsUrl), linkedCts.Token);
                     }
 
-                    SetConnected(true);
                     EnqueueMainThread(() =>
                     {
                         Debug.Log($"<color=green>[VResQ]</color> WebSocket CONNECTED to {targetIp}:{targetPort}!");
                     });
 
-                    // Acquire lease & send initial packet so FastAPI /ws immediately responds with state
-                    await SendRawJsonAsync("{\"type\":\"lease\",\"duration_s\":2.0}");
-                    await SendRawJsonAsync("{\"type\":\"control\",\"sequence\":1,\"linear\":0,\"angular\":0,\"servo\":90,\"speed\":0.75,\"estop\":false,\"buzzer\":false}");
+                    await SendRawJsonAsync("{\"type\":\"ping\"}");
 
                     byte[] buffer = new byte[32768];
                     var ms = new MemoryStream();
@@ -413,17 +438,28 @@ namespace VResQ.Core
                                 break;
                             }
                             ms.Write(buffer, 0, result.Count);
+                            if (ms.Length > 2 * 1024 * 1024)
+                                throw new InvalidDataException("Robot state message exceeds 2 MB");
                         } while (!result.EndOfMessage);
 
                         if (result.MessageType == WebSocketMessageType.Text && ms.Length > 0)
                         {
                             string rawJson = Encoding.UTF8.GetString(ms.ToArray());
                             // IMPORTANT: Always parse JsonUtility on the Unity Main Thread!
-                            EnqueueMainThread(() => ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: true));
+                            EnqueueMainThread(() =>
+                            {
+                                if (token.IsCancellationRequested || !ReferenceEquals(_webSocket, ws)) return;
+                                if (rawJson.Contains("\"auth_ok\""))
+                                {
+                                    _authenticated = true;
+                                    _ = SendRawJsonAsync("{\"type\":\"lease\",\"ttl_s\":0.75}");
+                                }
+                                else ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: false);
+                            });
                         }
                     }
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
                     break;
                 }
@@ -439,12 +475,15 @@ namespace VResQ.Core
                         if (ReferenceEquals(_webSocket, ws))
                         {
                             _webSocket = null;
+                            _authenticated = false;
+                            SetConnected(false);
                         }
                     }
                 }
 
                 if (!autoReconnect || token.IsCancellationRequested) break;
-                await Task.Delay(1200, token);
+                try { await Task.Delay(1200, token); }
+                catch (OperationCanceledException) { break; }
                 targetIp = robotIp;
                 targetPort = port;
             }
@@ -480,11 +519,6 @@ namespace VResQ.Core
                     _latestState = state;
 
                     float now = Time.realtimeSinceStartup;
-                    if (updateRttFromDelta && _lastStateReceivedRealtime > 0f)
-                    {
-                        float deltaMs = (now - _lastStateReceivedRealtime) * 1000f;
-                        latencyMs = Mathf.Lerp(latencyMs, Mathf.Clamp(deltaMs, 8f, 160f), 0.25f);
-                    }
                     _lastStateReceivedRealtime = now;
 
                     if (!isConnected) SetConnected(true);
@@ -517,6 +551,7 @@ namespace VResQ.Core
             {
                 string targetIp = robotIp;
                 int targetPort = port;
+                int generation = _connectionGeneration;
                 string url = $"http://{targetIp}:{targetPort}/api/state";
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 string json = await _httpClient.GetStringAsync(url);
@@ -527,6 +562,7 @@ namespace VResQ.Core
                 {
                     EnqueueMainThread(() =>
                     {
+                        if (generation != _connectionGeneration || targetIp != robotIp || targetPort != port) return;
                         latencyMs = rtt;
                         ProcessIncomingJsonOnMainThread(json, updateRttFromDelta: false);
                     });
