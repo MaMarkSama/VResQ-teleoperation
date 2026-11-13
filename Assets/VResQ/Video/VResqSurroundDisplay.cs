@@ -46,6 +46,7 @@ namespace VResQ.Video
 
         [Header("--- Camera Reference ---")]
         public Transform targetCamera;
+        public GameObject externalWorldRoot;
 
         private GameObject _screenObject;
         private MeshFilter _meshFilter;
@@ -298,6 +299,10 @@ namespace VResQ.Video
         {
             EnsureSurroundScreenReady(forceRebuildMesh: false);
             if (_screenObject == null) return;
+            var config = VResqFrameworkConfig.Instance;
+            bool visible = config == null || config.Profile.backgroundVisible;
+            if (externalWorldRoot != null)
+                externalWorldRoot.SetActive(visible && currentViewMode == SurroundViewMode.ExternalWorld);
 
             if (currentViewMode == SurroundViewMode.ExternalWorld)
             {
@@ -305,7 +310,7 @@ namespace VResQ.Video
             }
             else
             {
-                _screenObject.SetActive(true);
+                _screenObject.SetActive(visible);
                 GenerateCurvedMesh(arcAngle, radius, screenHeight);
             }
         }

@@ -50,6 +50,9 @@ namespace VResQ.Core
         public float surroundArcAngle = 360f;
         public float surroundVerticalOffset = 0.0f;
         public bool showCenterMonitorInSurround = true;
+        public bool backgroundVisible = true;
+        public bool robotMonitorVisible = true;
+        public float cameraBrightness = 1.2f;
         public float centerMonitorOpacityInSurround = 1.0f;
 
         // 3. HUD Ergonomics & Visual Theme
@@ -107,6 +110,8 @@ namespace VResQ.Core
 
         public void NotifyConfigChanged()
         {
+            Profile.cameraBrightness = float.IsNaN(Profile.cameraBrightness) || float.IsInfinity(Profile.cameraBrightness)
+                ? 1.2f : Mathf.Clamp(Profile.cameraBrightness, 0.5f, 2f);
             OnConfigChanged?.Invoke();
         }
 

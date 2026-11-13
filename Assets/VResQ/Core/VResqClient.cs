@@ -64,6 +64,8 @@ namespace VResQ.Core
         private readonly object _queueLock = new object();
         private RobotStateSnapshot _latestState = new RobotStateSnapshot();
         public RobotStateSnapshot LatestState => _latestState;
+        public string LastTelemetryError { get; private set; } = "";
+        public string LastRawState { get; private set; }
 
         private float _swarmPollTimer = 0f;
         private float _fleetProbeTimer = 0f;
@@ -492,6 +494,7 @@ namespace VResQ.Core
         private void ProcessIncomingJsonOnMainThread(string rawJson, bool updateRttFromDelta)
         {
             if (string.IsNullOrEmpty(rawJson)) return;
+            LastRawState = rawJson;
 
             try
             {
@@ -515,6 +518,8 @@ namespace VResQ.Core
 
                 if (state != null)
                 {
+                    LastTelemetryError = VResqTelemetryQuality.Validate(state.telemetry);
+                    if (!string.IsNullOrEmpty(LastTelemetryError)) return;
                     state.ParseRadarPoints(rawJson);
                     _latestState = state;
 
@@ -527,6 +532,7 @@ namespace VResQ.Core
             }
             catch (Exception ex)
             {
+                LastTelemetryError = "Malformed telemetry payload";
                 Debug.LogWarning($"[VResQ] JSON parse error: {ex.Message}");
             }
         }

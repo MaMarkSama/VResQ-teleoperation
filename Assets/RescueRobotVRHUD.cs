@@ -138,6 +138,7 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void Start()
     {
+        ClearTelemetryDisplay();
         if (latencyText != null)
         {
             latencyText.fontSize = 13f;
@@ -171,6 +172,29 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         ApplyFrameworkVisuals();
         RefreshFleetNodeCards();
+    }
+
+    private void ClearTelemetryDisplay()
+    {
+        foreach (var label in new[] { opsStripText, sensorStripText, compassHeadingText, speedPercentText,
+            motorLeftText, motorRightText, ultrasonicDistanceText, servoPanText, fsmActionText,
+            pitchText, rollText, yawText, envMetricsText, smartAssistText,
+            missionAssessmentText, hardwareHealthText, batteryText, oledPreviewText,
+            healthText, sensorListText })
+            if (label != null) label.text = "--";
+        foreach (var label in new[] { smartAssistText, missionAssessmentText, hardwareHealthText, envMetricsText, oledPreviewText })
+            if (label != null) label.text = "Waiting for telemetry";
+        foreach (var label in new[] { motorLeftText, motorRightText, speedPercentText, servoPanText })
+            if (label != null)
+            {
+                label.enableAutoSizing = true;
+                label.fontSizeMin = 10f;
+                label.fontSizeMax = 16f;
+                label.textWrappingMode = TextWrappingModes.NoWrap;
+                label.overflowMode = TextOverflowModes.Ellipsis;
+            }
+        foreach (var bar in new[] { motorLeftBarFill, motorRightBarFill, batteryBarFill })
+            if (bar != null) bar.fillAmount = 0f;
     }
 
     private void OnDestroy()
@@ -508,10 +532,35 @@ public class RescueRobotVRHUD : MonoBehaviour
     /// <summary>
     /// Renders 100% of the exact same state fields as renderState(s) in the Web Dashboard's app.js!
     /// </summary>
+    private string _renderedFrameId;
+
+    private void LateUpdate()
+    {
+        if (_cameraReceiver == null || VResqClient.Instance == null) return;
+        string frameId = _cameraReceiver.HasReceivedLiveFrame ? _cameraReceiver.DisplayedMetadata?.frame_id : null;
+        if (_renderedFrameId != frameId)
+        {
+            _renderedFrameId = frameId;
+            OnRobotStateReceived(VResqClient.Instance.LatestState);
+        }
+        RenderAiDetections(VResqClient.Instance.LatestState.ai_detections);
+        if (_config != null && !_config.Profile.robotMonitorVisible) RenderAiDetections(null);
+    }
+
     private void OnRobotStateReceived(RobotStateSnapshot s)
     {
         if (s == null) return;
+        RobotStateSnapshot observedState = s;
         TelemetryData t = s.telemetry ?? new TelemetryData();
+        var frame = _cameraReceiver != null && _cameraReceiver.HasReceivedLiveFrame
+            ? _cameraReceiver.DisplayedMetadata : null;
+        if (frame != null && frame.telemetry != null && VResqClient.Instance != null &&
+            _cameraReceiver.DisplayedSourceIp == VResqClient.Instance.robotIp &&
+            string.IsNullOrEmpty(VResqTelemetryQuality.Validate(frame.telemetry.telemetry)))
+        {
+            observedState = frame.telemetry;
+            t = observedState.telemetry;
+        }
         SensorStatusFlags sensors = t.sensors ?? new SensorStatusFlags();
         bool freshTelemetry = s.last_telem_age_ms > 0.01f && s.last_telem_age_ms < 1200f;
 
@@ -567,7 +616,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         string cmdAgeStr = s.last_command_age_ms > 0.01f ? $"{s.last_command_age_ms:F0} ms" : "--";
         string telAgeStr = espOnline && s.last_telem_age_ms > 0.01f ? $"{s.last_telem_age_ms:F0} ms" : "HOST LIVE";
 
-        float headingDeg = Mathf.Abs(t.yaw_deg) > 0.01f ? t.yaw_deg : (s.pose_heading * Mathf.Rad2Deg);
+        float headingDeg = freshTelemetry && sensors.mpu6050 ? t.yaw_deg : (observedState.pose_heading * Mathf.Rad2Deg);
         float normHdg = ((headingDeg % 360f) + 360f) % 360f;
         float dispTemp = (freshTelemetry && sensors.bme280) ? t.temp_c :
             ((s.environment != null && s.environment.display_temp_c > 0.1f) ? s.environment.display_temp_c :
@@ -609,7 +658,7 @@ public class RescueRobotVRHUD : MonoBehaviour
                 float alertLimit = _config != null ? _config.Profile.collisionAlertCm : 25f;
                 string distPill = t.ultrasonic_cm > 0.5f 
                     ? (t.ultrasonic_cm < alertLimit ? $"<color=#FF2A6D>⚠ {t.ultrasonic_cm:F0} cm (ใกล้)</color>" : $"<color=#00FF88>{t.ultrasonic_cm:F0} cm (ปลอดภัย)</color>") 
-                    : "<color=#70889B>-- cm (ทางโล่ง)</color>";
+                    : "<color=#70889B>-- cm (NO ECHO)</color>";
                 string tempPill = dispTemp > 0.1f ? $"<color=#00F0FF>{dispTemp:F1}°C ({tempSourceTag})</color>" : "<color=#70889B>--</color>";
                 string hdgPill = $"<color=#00FF88>{normHdg:000}° {GetCompassDirection(normHdg)}</color>";
                 sensorStripText.text =
@@ -642,28 +691,22 @@ public class RescueRobotVRHUD : MonoBehaviour
             compassHeadingText.text = $"◄  HDG {normHdg:000.0}° {GetCompassDirection(normHdg)}  |  POSE ({s.pose_x:+0.0;-0.0}, {s.pose_y:+0.0;-0.0})  ►";
         }
 
-        float throttlePct = (s.speed_scale > 0.01f ? s.speed_scale : (_teleop != null ? _teleop.EffectiveSpeedScale : 0.75f)) * 100f;
-        string torquePreset = throttlePct >= 95f ? "TURBO 100%" : (throttlePct >= 80f ? "NORM 85%" : "ECO 65%");
+        float throttlePct = Mathf.Clamp01(s.speed_scale) * 100f;
         if (speedPercentText != null)
         {
-            speedPercentText.text = $"SPEED: {throttlePct:F0}% ({torquePreset})";
+            speedPercentText.text = $"SPEED: {throttlePct:F0}% (COMMAND SCALE)";
         }
         if (speedBarFill != null)
         {
             speedBarFill.fillAmount = Mathf.Clamp01(throttlePct / 100f);
         }
 
-        int lPwm = (t.motor_left_cmd != 0) ? t.motor_left_cmd : s.left_pwm;
-        int rPwm = (t.motor_right_cmd != 0) ? t.motor_right_cmd : s.right_pwm;
-        // If user is pushing joystick locally while robot motors are 0, show responsive feedback
-        if (lPwm == 0 && rPwm == 0 && _teleop != null && (_teleop.SimulatedLeftPwm != 0 || _teleop.SimulatedRightPwm != 0))
-        {
-            lPwm = _teleop.SimulatedLeftPwm;
-            rPwm = _teleop.SimulatedRightPwm;
-        }
+        bool hasEspMotorReport = t.motor_driver != "legacy" && !string.IsNullOrEmpty(t.motor_driver);
+        int lPwm = hasEspMotorReport ? t.motor_left_cmd : observedState.left_pwm;
+        int rPwm = hasEspMotorReport ? t.motor_right_cmd : observedState.right_pwm;
         UpdateMotorGauges(lPwm, rPwm);
 
-        int sDeg = s.servo_deg > 0 ? s.servo_deg : t.servo_deg;
+        int sDeg = observedState.servo_deg;
         UpdateServoGauge(sDeg);
 
         if (fsmActionText != null)
@@ -690,7 +733,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         }
 
         // 5. OLED Display Mirror (Exact match to renderOledPreview in Web app.js)
-        RenderOledPreview(s.oled_page, s);
+        RenderOledPreview(observedState.oled_page, observedState);
 
         // 6. Right Wing Card 1: IMU & Radar Twin + 8-Metric Grid
         float pitch = t.pitch_deg;
@@ -744,29 +787,17 @@ public class RescueRobotVRHUD : MonoBehaviour
         }
 
         // 7. Right Wing Card 2: Smart Assist (Exact match to renderSmartAssist in Web app.js)
-        int onlineSensorCount = (sensors.ultrasonic ? 1 : 0) + (sensors.bme280 ? 1 : 0) + (sensors.mpu6050 ? 1 : 0) + (sensors.oled ? 1 : 0);
-        int score = 0;
-        if (espOnline)
-        {
-            score += 50;
-            score += onlineSensorCount * 12;
-        }
-        else
-        {
-            // LIVE-HW Host Compute Readiness Score
-            score = 92;
-            if (s.serial_connected) score += 4;
-            if (dispTemp > 78f) score -= 12;
-        }
-        if (dist > 0f && dist < 15f) score -= 20;
-        score = Mathf.Clamp(score, 0, 100);
+        int onlineSensorCount = espOnline && freshTelemetry
+            ? (sensors.ultrasonic ? 1 : 0) + (sensors.bme280 ? 1 : 0) + (sensors.mpu6050 ? 1 : 0) + (sensors.oled ? 1 : 0)
+            : 0;
+        int score = onlineSensorCount * 25;
 
         float curRtt = VResqClient.Instance != null ? VResqClient.Instance.LatencyMs : 12f;
         string scoreColor = score >= 75 ? "#00FF88" : (score >= 45 ? "#FFD166" : "#FF5566");
         string linkQual = espOnline
             ? $"<color=#00FF88>{s.last_telem_age_ms:F0} ms live</color>"
             : $"<color=#00FF88>WS {curRtt:F0} ms live</color>";
-        string obsStatus = dist > 0f ? (dist < 15f ? $"<color=#FF5566>close {dist:F0} cm</color>" : $"<color=#00FF88>{dist:F0} cm clear</color>") : "clear (no echo)";
+        string obsStatus = dist > 0f ? (dist < 15f ? $"<color=#FF5566>close {dist:F0} cm</color>" : $"<color=#00FF88>{dist:F0} cm</color>") : "UNKNOWN (no echo)";
         string busStatus = espOnline
             ? $"<color=#00FF88>{onlineSensorCount}/4 sensors online</color>"
             : (s.serial_connected ? $"<color=#FFD166>UART {s.serial_port} (wait ESP32)</color>" : "<color=#00F0FF>Host Compute Online (LIVE-HW)</color>");
@@ -779,25 +810,26 @@ public class RescueRobotVRHUD : MonoBehaviour
             if (hudDensity == HudDensityMode.Streamlined)
             {
                 smartAssistText.text =
-                    $"<b>ความพร้อมระบบ:</b> <color={scoreColor}>{score}%</color>   •   <b>สิ่งกีดขวาง:</b> {obsStatus}\n" +
+                    $"<b>Sensor/bus coverage:</b> <color={scoreColor}>{onlineSensorCount}/4</color>   •   <b>สิ่งกีดขวาง:</b> {obsStatus}\n" +
                     $"<b>คำแนะนำ:</b> <color=#00F0FF>{suggestion}</color>";
             }
             else
             {
                 smartAssistText.text =
-                    $"<b>Health Score:</b> <color={scoreColor}>{score}%</color>   |   <b>Link:</b> {linkQual}   |   <b>Obstacle:</b> {obsStatus}\n" +
+                    $"<b>Sensor/bus coverage:</b> <color={scoreColor}>{onlineSensorCount}/4</color>   |   <b>Link:</b> {linkQual}   |   <b>Obstacle:</b> {obsStatus}\n" +
                     $"<b>Sensor Bus:</b> {busStatus}   |   <b>Roughness:</b> {t.terrain_roughness:F2}\n" +
                     $"<b>Suggestion:</b> <color=#00F0FF>{suggestion}</color>";
             }
         }
 
         // 8. Right Wing Card 3: Mission Assessment & Intelligence (Matches Web assessment-panel)
-        int survScore = (s.analytics != null && s.analytics.survivability != null && s.analytics.survivability.score > 0)
+        int survScore = (s.analytics != null && s.analytics.survivability != null && s.analytics.survivability.score >= 0)
             ? s.analytics.survivability.score
-            : 100;
+            : -1;
+        string assessmentScore = survScore >= 0 && survScore <= 100 ? survScore.ToString() : "--";
         string tractionStr = (s.analytics != null && s.analytics.traction != null && !string.IsNullOrEmpty(s.analytics.traction.status))
             ? s.analytics.traction.status.Replace("_", " ")
-            : "TRACTION NOMINAL (สภาพพื้นผิวปกติ)";
+            : "UNKNOWN";
         float dewPoint = t.temp_c - ((100f - Mathf.Max(1f, t.humidity)) / 5f);
         float maxTilt = Mathf.Max(Mathf.Abs(pitch), Mathf.Abs(roll));
         string terrainGrade = maxTilt > 20f ? "<color=#FF5566>GRADE C (ลาดชันสูง)</color>" : (maxTilt > 10f ? "<color=#FFD166>GRADE B (เอียงเล็กน้อย)</color>" : "<color=#00FF88>GRADE A (พื้นเรียบ ปลอดภัย)</color>");
@@ -807,13 +839,13 @@ public class RescueRobotVRHUD : MonoBehaviour
             if (hudDensity == HudDensityMode.Streamlined)
             {
                 hardwareHealthText.text =
-                    $"<b>อัตราการอยู่รอด (SURVIVABILITY):</b> <size=18><color=#00FF88>{survScore}%</color></size>\n" +
+                    $"<b>BACKEND ANALYTICS SCORE:</b> <size=18><color=#00FF88>{assessmentScore}</color></size>\n" +
                     $"<b>สภาพพื้นผิว:</b> <color=#00F0FF>{tractionStr}</color>   •   <b>ความชัน:</b> {terrainGrade}";
             }
             else
             {
                 hardwareHealthText.text =
-                    $"<b>SURVIVABILITY SCORE: <color=#00FF88>{survScore}%</color></b>\n" +
+                    $"<b>BACKEND ANALYTICS SCORE: <color=#00FF88>{assessmentScore}</color></b>\n" +
                     $"• <b>การยึดเกาะ/ล้อขับ:</b> <color=#00FF88>{tractionStr}</color>\n" +
                     $"• <b>สภาพโพรงอากาศ:</b> STABLE ATMOSPHERE   |   <b>จุดน้ำค้าง:</b> DP {dewPoint:F1}°C\n" +
                     $"• <b>ความลาดชัน:</b> {terrainGrade}\n" +
@@ -883,7 +915,7 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void UpdateServoGauge(int sDeg)
     {
-        if (sDeg <= 0) sDeg = 90;
+        sDeg = Mathf.Clamp(sDeg, 0, 180);
         if (servoPanText != null)
         {
             servoPanText.text = $"SERVO: {sDeg} deg";
@@ -899,7 +931,7 @@ public class RescueRobotVRHUD : MonoBehaviour
     {
         if (aiBboxContainer == null) return;
 
-        int count = detections != null ? detections.Length : 0;
+        int count = detections != null ? Mathf.Min(detections.Length, 128) : 0;
         while (_activeBboxPool.Count < count)
         {
             GameObject boxObj = new GameObject($"AI_BBox_{_activeBboxPool.Count}");
@@ -956,8 +988,17 @@ public class RescueRobotVRHUD : MonoBehaviour
             }
 
             var d = detections[i];
+            var metadata = _cameraReceiver != null && _cameraReceiver.HasReceivedLiveFrame
+                ? _cameraReceiver.DisplayedMetadata : null;
+            if (d == null || metadata == null || d.frame_id != metadata.frame_id)
+            {
+                _activeBboxPool[i].SetActive(false);
+                continue;
+            }
             float[] coords = (d.bbox != null && d.bbox.Length >= 4) ? d.bbox : d.box;
-            if (coords == null || coords.Length < 4)
+            if (coords == null || coords.Length < 4 ||
+                Array.Exists(coords, value => float.IsNaN(value) || float.IsInfinity(value)) ||
+                coords[2] <= coords[0] || coords[3] <= coords[1])
             {
                 _activeBboxPool[i].SetActive(false);
                 continue;

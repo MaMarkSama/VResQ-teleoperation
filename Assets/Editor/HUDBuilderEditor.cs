@@ -563,6 +563,7 @@ public class HUDBuilderEditor : EditorWindow
         ctrl.WireAllInteractiveButtons();
         ctrl.ApplyFrameworkVisuals();
         surround.EnsureSurroundScreenReady(forceRebuildMesh: true);
+        VResqAutoSetup.RepairActiveScene();
 
         EditorUtility.SetDirty(hudRoot);
         var activeScene = EditorSceneManager.GetActiveScene();

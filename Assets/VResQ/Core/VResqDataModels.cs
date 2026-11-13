@@ -113,7 +113,7 @@ namespace VResQ.Core
     [Serializable]
     public class SurvivabilityData
     {
-        public int score = 100;
+        public int score = -1;
         public string category = "NOMINAL";
         public string level = "SAFE";
         public string label = "NORMAL";
@@ -141,6 +141,7 @@ namespace VResQ.Core
     [Serializable]
     public class AIDetection
     {
+        public string frame_id;
         public string id;
         public string label;
         public float score;

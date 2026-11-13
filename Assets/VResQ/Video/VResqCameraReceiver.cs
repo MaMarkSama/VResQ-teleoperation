@@ -47,12 +47,22 @@ namespace VResQ.Video
         [SerializeField] private string activeCameraSourceIp = "192.168.1.138";
         public string ActiveCameraSourceIp => activeCameraSourceIp;
         private float _lastFrameRealtime = -1f;
+        public VResqFrameMetadata DisplayedMetadata { get; private set; }
+        public string RawFrameMetadata { get; private set; }
+        public string LastDataError { get; private set; } = "";
+        public int RejectedFrames { get; private set; }
+        [SerializeField, TextArea(2, 6)] private string lastRejectedMetadata;
+        public void ResetDiagnostics() { RejectedFrames = 0; LastDataError = ""; }
+        public string FrameSyncStatus => DisplayedMetadata == null ? "UNSYNCED" : "FRAME SNAPSHOT";
 
         private Texture2D _videoTexture;
         public Texture2D VideoTexture => _videoTexture;
 
         private CancellationTokenSource _cts;
         private byte[] _latestFrameBytes;
+        private string _latestMetadataJson;
+        private string _latestSourceIp;
+        public string DisplayedSourceIp { get; private set; }
         private readonly object _frameLock = new object();
         private bool _hasNewFrame = false;
 
@@ -168,19 +178,45 @@ namespace VResQ.Video
             EnsureTextureCreated();
 
             byte[] frameToLoad = null;
+            string metadataJson = null;
+            string sourceIp = null;
             lock (_frameLock)
             {
                 if (_hasNewFrame && _latestFrameBytes != null)
                 {
                     frameToLoad = _latestFrameBytes;
+                    metadataJson = _latestMetadataJson;
+                    sourceIp = _latestSourceIp;
                     _hasNewFrame = false;
                 }
             }
 
             if (frameToLoad != null)
             {
+                VResqFrameMetadata metadata;
+                try
+                {
+                    metadata = VResqFrameMetadata.Parse(metadataJson);
+                    if (metadata != null && DisplayedMetadata != null &&
+                        metadata.source_session_id == DisplayedMetadata.source_session_id &&
+                        metadata.sequence <= DisplayedMetadata.sequence)
+                        throw new FormatException("Duplicate or out-of-order camera frame");
+                }
+                catch (Exception error)
+                {
+                    RejectedFrames++;
+                    lastRejectedMetadata = metadataJson;
+                    LastDataError = error.Message;
+                    hasReceivedLiveFrame = false;
+                    return false;
+                }
                 if (_videoTexture.LoadImage(frameToLoad))
                 {
+                    DisplayedMetadata = metadata;
+                    DisplayedSourceIp = sourceIp;
+                    RawFrameMetadata = metadataJson;
+                    LastDataError = metadata == null ? "Frame metadata unavailable" :
+                        VResqTelemetryQuality.Validate(metadata.telemetry != null ? metadata.telemetry.telemetry : null);
                     hasReceivedLiveFrame = true;
                     _lastFrameRealtime = Time.realtimeSinceStartup;
                     _fpsCounter++;
@@ -223,12 +259,16 @@ namespace VResQ.Video
             _cts?.Cancel();
             _cts = null;
             hasReceivedLiveFrame = false;
+            DisplayedMetadata = null;
+            DisplayedSourceIp = null;
+            RawFrameMetadata = null;
             _lastFrameRealtime = -1f;
             currentFps = 0f;
             _fpsCounter = 0;
             lock (_frameLock)
             {
                 _latestFrameBytes = null;
+                _latestMetadataJson = null;
                 _hasNewFrame = false;
             }
         }
@@ -303,143 +343,49 @@ namespace VResQ.Video
         private async Task<int> StreamSingleNodeTcpAsync(string ip, int port, CancellationToken token)
         {
             int decodedFrames = 0;
-            TcpClient tcp = null;
-
-            try
+            using (var tcp = new TcpClient())
+            using (token.Register(() => tcp.Close()))
             {
-                tcp = new TcpClient();
-                tcp.ReceiveBufferSize = 131072;
-                tcp.NoDelay = true;
-
-                // 1. Connect with 1.5s timeout
-                var connectTask = tcp.ConnectAsync(ip, port);
-                var timeoutTask = Task.Delay(1500, token);
-                var completed = await Task.WhenAny(connectTask, timeoutTask);
-                if (completed != connectTask || !tcp.Connected)
+                try
                 {
-                    return 0;
-                }
-
-                using (NetworkStream netStream = tcp.GetStream())
-                {
-                    // 2. Send HTTP/1.0 request so uvicorn DOES NOT apply Transfer-Encoding: chunked!
-                    string reqStr = $"GET /video_feed HTTP/1.0\r\nHost: {ip}:{port}\r\nUser-Agent: VResQ-Unity/1.0\r\nConnection: close\r\n\r\n";
-                    byte[] reqBytes = Encoding.ASCII.GetBytes(reqStr);
-                    await netStream.WriteAsync(reqBytes, 0, reqBytes.Length, token);
-                    await netStream.FlushAsync(token);
-
-                    byte[] readBuffer = new byte[65536];
-                    byte[] workBuffer = new byte[524288];
-                    int workLen = 0;
-                    var firstFrameWatch = System.Diagnostics.Stopwatch.StartNew();
-                    long lastReadMs = firstFrameWatch.ElapsedMilliseconds;
-                    Task sharedWatchdog = null;
-
-                    while (!token.IsCancellationRequested)
+                    tcp.NoDelay = true;
+                    var connect = tcp.ConnectAsync(ip, port);
+                    if (await Task.WhenAny(connect, Task.Delay(1500, token)) != connect)
+                        throw new TimeoutException("Camera connection timed out");
+                    await connect;
+                    using (var stream = tcp.GetStream())
                     {
-                        int readTimeoutMs = decodedFrames == 0 ? 2200 : 3500;
-                        var readTask = netStream.ReadAsync(readBuffer, 0, readBuffer.Length, token);
-
-                        if (!readTask.IsCompleted)
+                        string request = $"GET /video_feed HTTP/1.0\r\nHost: {ip}:{port}\r\nConnection: close\r\n\r\n";
+                        byte[] bytes = Encoding.ASCII.GetBytes(request);
+                        await stream.WriteAsync(bytes, 0, bytes.Length, token);
+                        var reader = new VResqMjpegReader(stream);
+                        while (!token.IsCancellationRequested)
                         {
-                            while (!readTask.IsCompleted && !token.IsCancellationRequested)
+                            var read = reader.ReadAsync(token);
+                            if (await Task.WhenAny(read, Task.Delay(3500, token)) != read)
                             {
-                                if (sharedWatchdog == null || sharedWatchdog.IsCompleted)
-                                {
-                                    sharedWatchdog = Task.Delay(400, token);
-                                }
-                                await Task.WhenAny(readTask, sharedWatchdog);
-                                if (!readTask.IsCompleted && (firstFrameWatch.ElapsedMilliseconds - lastReadMs) > readTimeoutMs)
-                                {
-                                    break;
-                                }
+                                tcp.Close();
+                                try { await read; } catch { }
+                                throw new TimeoutException("Camera frame timed out");
                             }
-                            if (!readTask.IsCompleted)
+                            var frame = await read;
+                            lock (_frameLock)
                             {
-                                break;
+                                if (token.IsCancellationRequested) return decodedFrames;
+                                _latestFrameBytes = frame.jpeg;
+                                _latestMetadataJson = frame.metadata;
+                                _latestSourceIp = ip;
+                                _hasNewFrame = true;
                             }
-                        }
-
-                        int bytesRead = await readTask;
-                        if (bytesRead <= 0) break;
-                        lastReadMs = firstFrameWatch.ElapsedMilliseconds;
-
-                        if (workLen + bytesRead > workBuffer.Length)
-                        {
-                            workLen = 0;
-                        }
-
-                        Buffer.BlockCopy(readBuffer, 0, workBuffer, workLen, bytesRead);
-                        workLen += bytesRead;
-
-                        // Extract all complete JPEG frames (SOI 0xFF 0xD8 .. EOI 0xFF 0xD9)
-                        while (true)
-                        {
-                            int soi = FindMarker(workBuffer, workLen, 0xFF, 0xD8, 0);
-                            if (soi < 0)
-                            {
-                                // SOI may be split across TCP reads.
-                                bool trailingFF = workLen > 0 && workBuffer[workLen - 1] == 0xFF;
-                                workLen = trailingFF ? 1 : 0;
-                                if (trailingFF) workBuffer[0] = 0xFF;
-                                break;
-                            }
-
-                            int eoi = FindMarker(workBuffer, workLen, 0xFF, 0xD9, soi + 2);
-                            if (eoi < 0)
-                            {
-                                if (soi > 0)
-                                {
-                                    int rem = workLen - soi;
-                                    Buffer.BlockCopy(workBuffer, soi, workBuffer, 0, rem);
-                                    workLen = rem;
-                                }
-                                break;
-                            }
-
-                            int jpegLen = (eoi + 2) - soi;
-                            if (jpegLen > 256)
-                            {
-                                byte[] jpegBytes = new byte[jpegLen];
-                                Buffer.BlockCopy(workBuffer, soi, jpegBytes, 0, jpegLen);
-
-                                lock (_frameLock)
-                                {
-                                    if (token.IsCancellationRequested) return decodedFrames;
-                                    _latestFrameBytes = jpegBytes;
-                                    _hasNewFrame = true;
-                                }
-                                decodedFrames++;
-                            }
-
-                            int leftover = workLen - (eoi + 2);
-                            if (leftover > 0)
-                            {
-                                Buffer.BlockCopy(workBuffer, eoi + 2, workBuffer, 0, leftover);
-                            }
-                            workLen = leftover;
-                        }
-
-                        // Move to the next candidate when this stream produces no JPEG frames.
-                        if (decodedFrames == 0 && firstFrameWatch.ElapsedMilliseconds > 2200)
-                        {
-                            break;
+                            decodedFrames++;
                         }
                     }
                 }
-            }
-            catch
-            {
-                // Reconnect / failover handled by StreamMasterLoopAsync
-            }
-            finally
-            {
-                if (tcp != null)
+                catch (Exception error)
                 {
-                    try { tcp.Close(); } catch { }
+                    if (!token.IsCancellationRequested) LastDataError = error.Message;
                 }
             }
-
             return decodedFrames;
         }
 
