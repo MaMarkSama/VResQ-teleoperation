@@ -115,7 +115,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (client == null)
         {
             client = gameObject.AddComponent<VResqClient>();
-            client.robotIp = "172.20.10.3";
+            client.robotIp = "172.20.10.4";
             client.port = 8000;
         }
 
@@ -502,7 +502,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         var id = (s.identity != null && !string.IsNullOrEmpty(s.identity.node_name)) ? s.identity : s.node_info;
         string rName = id != null && !string.IsNullOrEmpty(id.node_name) ? id.node_name : "vresq-node-zero";
         string role = id != null && !string.IsNullOrEmpty(id.role) ? id.role : "t2-dashboard";
-        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "172.20.10.3";
+        string curIp = VResqClient.Instance != null ? VResqClient.Instance.robotIp : "172.20.10.4";
 
         if (robotIdText != null)
         {
@@ -538,14 +538,22 @@ public class RescueRobotVRHUD : MonoBehaviour
         }
 
         // 2. Web Dashboard Ops Strip & 6-Sensor Strip
+        bool espOnline = s.esp32_online || (s.sensor_status != null && s.sensor_status.esp32_online) || (freshTelemetry && t.rx_ok > 0);
         string fsmName = (t.fsm_state >= 0 && t.fsm_state < FSM_NAMES.Length) ? FSM_NAMES[t.fsm_state] : t.fsm_state.ToString();
-        string serialStr = s.serial_connected ? $"<color=#00FF88>ONLINE ({s.serial_port})</color>" : "<color=#FF6677>offline</color>";
+        string serialStr = espOnline
+            ? $"<color=#00FF88>ESP32 ONLINE ({s.serial_port})</color>"
+            : (s.serial_connected ? $"<color=#FFD166>UART OPEN ({s.serial_port})</color>" : "<color=#00F0FF>HOST TELEMETRY (LIVE-HW)</color>");
         string actStr = !string.IsNullOrEmpty(s.active_action) ? s.active_action : "idle";
         string cmdAgeStr = s.last_command_age_ms > 0.01f ? $"{s.last_command_age_ms:F0} ms" : "--";
-        string telAgeStr = s.last_telem_age_ms > 0.01f ? $"{s.last_telem_age_ms:F0} ms" : "--";
+        string telAgeStr = espOnline && s.last_telem_age_ms > 0.01f ? $"{s.last_telem_age_ms:F0} ms" : "HOST LIVE";
 
         float headingDeg = Mathf.Abs(t.yaw_deg) > 0.01f ? t.yaw_deg : (s.pose_heading * Mathf.Rad2Deg);
         float normHdg = ((headingDeg % 360f) + 360f) % 360f;
+        float dispTemp = (freshTelemetry && sensors.bme280) ? t.temp_c :
+            ((s.environment != null && s.environment.display_temp_c > 0.1f) ? s.environment.display_temp_c :
+            ((s.host != null && s.host.board_temp_c > 0.1f) ? s.host.board_temp_c :
+            ((s.host != null && s.host.cpu_temp_c > 0.1f) ? s.host.cpu_temp_c : t.temp_c)));
+        string tempSourceTag = (freshTelemetry && sensors.bme280) ? "ENV" : "BOARD";
 
         if (opsStripText != null)
         {
@@ -557,17 +565,23 @@ public class RescueRobotVRHUD : MonoBehaviour
             else
             {
                 opsStripText.text =
-                    $"<b>Robot:</b> {rName}   |   <b>Serial:</b> {serialStr}   |   <b>FSM:</b> {fsmName}   |   <b>Action:</b> <color=#00F0FF>{actStr}</color>   |   <b>Cmd Age:</b> {cmdAgeStr}   |   <b>Telem Age:</b> {telAgeStr}";
+                    $"<b>Robot:</b> {rName}   |   <b>Bus:</b> {serialStr}   |   <b>FSM:</b> {fsmName}   |   <b>Action:</b> <color=#00F0FF>{actStr}</color>   |   <b>Cmd Age:</b> {cmdAgeStr}   |   <b>Telem:</b> {telAgeStr}";
             }
         }
 
         if (sensorStripText != null)
         {
-            string usCard = (freshTelemetry && sensors.ultrasonic) ? $"<color=#00FF88>{t.ultrasonic_cm:F0} cm</color>" : (t.ultrasonic_cm > 0 ? $"{t.ultrasonic_cm:F0} cm" : "offline");
-            string bmeCard = (freshTelemetry && sensors.bme280) ? $"<color=#00FF88>{t.temp_c:F1}°C / {t.humidity:F0}%</color>" : "offline";
-            string mpuCard = (freshTelemetry && sensors.mpu6050) ? $"<color=#00FF88>P:{t.pitch_deg:F0}° R:{t.roll_deg:F0}°</color>" : "offline";
-            string oledCard = (freshTelemetry && sensors.oled) ? $"<color=#00FF88>Page {s.oled_page}</color>" : $"Page {s.oled_page} (offline)";
-            string altCard = (freshTelemetry && sensors.bme280) ? $"{t.altitude_m:F1} m" : $"{t.altitude_m:F1} m";
+            string usCard = (freshTelemetry && sensors.ultrasonic) ? $"<color=#00FF88>{t.ultrasonic_cm:F0} cm</color>" : (t.ultrasonic_cm > 0 ? $"{t.ultrasonic_cm:F0} cm" : "standby");
+            string bmeCard = (freshTelemetry && sensors.bme280)
+                ? $"<color=#00FF88>{t.temp_c:F1}°C / {t.humidity:F0}%</color>"
+                : (dispTemp > 0.1f ? $"<color=#00F0FF>Host {dispTemp:F1}°C</color>" : "standby");
+            string mpuCard = (freshTelemetry && sensors.mpu6050)
+                ? $"<color=#00FF88>P:{t.pitch_deg:F0}° R:{t.roll_deg:F0}°</color>"
+                : $"<color=#00F0FF>ODO {normHdg:000.0}°</color>";
+            string oledCard = (freshTelemetry && sensors.oled) ? $"<color=#00FF88>Page {s.oled_page}</color>" : $"Page {s.oled_page}";
+            string altCard = (freshTelemetry && sensors.bme280)
+                ? $"{t.altitude_m:F1} m"
+                : (s.host != null ? $"RAM {s.host.ram_pct:F0}% / Disk {s.host.disk_pct:F0}%" : $"{t.altitude_m:F1} m");
             string yawCard = $"{normHdg:000.0}°";
 
             if (hudDensity == HudDensityMode.Streamlined)
@@ -576,7 +590,7 @@ public class RescueRobotVRHUD : MonoBehaviour
                 string distPill = t.ultrasonic_cm > 0.5f 
                     ? (t.ultrasonic_cm < alertLimit ? $"<color=#FF2A6D>⚠ {t.ultrasonic_cm:F0} cm (ใกล้)</color>" : $"<color=#00FF88>{t.ultrasonic_cm:F0} cm (ปลอดภัย)</color>") 
                     : "<color=#70889B>-- cm (ทางโล่ง)</color>";
-                string tempPill = freshTelemetry ? $"<color=#00F0FF>{t.temp_c:F1}°C</color>" : "<color=#70889B>--</color>";
+                string tempPill = dispTemp > 0.1f ? $"<color=#00F0FF>{dispTemp:F1}°C ({tempSourceTag})</color>" : "<color=#70889B>--</color>";
                 string hdgPill = $"<color=#00FF88>{normHdg:000}° {GetCompassDirection(normHdg)}</color>";
                 sensorStripText.text =
                     $"<b>ระยะข้างหน้า:</b> {distPill}   •   <b>อุณหภูมิ:</b> {tempPill}   •   <b>ทิศทาง:</b> {hdgPill}";
@@ -584,7 +598,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             else
             {
                 sensorStripText.text =
-                    $"<b>Ultrasonic:</b> {usCard}   |   <b>BME280:</b> {bmeCard}   |   <b>MPU6050:</b> {mpuCard}   |   <b>OLED:</b> {oledCard}   |   <b>Altitude:</b> {altCard}   |   <b>Fused Yaw:</b> <color=#00F0FF>{yawCard}</color>";
+                    $"<b>Ultrasonic:</b> {usCard}   |   <b>Thermal:</b> {bmeCard}   |   <b>IMU/Odo:</b> {mpuCard}   |   <b>OLED:</b> {oledCard}   |   <b>Host:</b> {altCard}   |   <b>Fused Yaw:</b> <color=#00F0FF>{yawCard}</color>";
             }
         }
 
@@ -673,35 +687,72 @@ public class RescueRobotVRHUD : MonoBehaviour
 
         if (envMetricsText != null)
         {
+            bool hasBme = freshTelemetry && sensors.bme280;
+            float cpuTemp = s.host != null ? s.host.cpu_temp_c : 0f;
+            float ramPct = s.host != null ? s.host.ram_pct : 0f;
+            float diskPct = s.host != null ? s.host.disk_pct : 0f;
+            float load1m = s.host != null ? s.host.load_1m : 0f;
+
             if (hudDensity == HudDensityMode.Streamlined)
             {
-                envMetricsText.text =
-                    $"<b>อุณหภูมิ:</b> <color=#00F0FF>{t.temp_c:F1}°C</color>   <b>ความชื้น:</b> <color=#00FF88>{t.humidity:F0}%</color>   <b>ความกดอากาศ:</b> <color=#FFD166>{t.pressure_hpa:F0} hPa</color>";
+                if (hasBme)
+                {
+                    envMetricsText.text =
+                        $"<b>อุณหภูมิ:</b> <color=#00F0FF>{t.temp_c:F1}°C</color>   <b>ความชื้น:</b> <color=#00FF88>{t.humidity:F0}%</color>   <b>ความกดอากาศ:</b> <color=#FFD166>{t.pressure_hpa:F0} hPa</color>";
+                }
+                else
+                {
+                    envMetricsText.text =
+                        $"<b>อุณหภูมิบอร์ด:</b> <color=#00F0FF>{dispTemp:F1}°C</color>   <b>CPU:</b> <color=#00FF88>{cpuTemp:F1}°C</color>   <b>RAM/Disk:</b> <color=#FFD166>{ramPct:F0}% / {diskPct:F0}%</color>";
+                }
             }
             else
             {
-                envMetricsText.text =
-                    $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}°     <b>Alt:</b> {t.altitude_m:F1} m\n" +
-                    $"<b>Temp:</b> {t.temp_c:F1} °C    <b>Humid:</b> {t.humidity:F0} %    <b>Pressure:</b> {t.pressure_hpa:F0} hPa    <b>Heat Idx:</b> {t.heat_index_c:F1} °C";
+                if (hasBme)
+                {
+                    envMetricsText.text =
+                        $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}°     <b>Alt:</b> {t.altitude_m:F1} m\n" +
+                        $"<b>Temp:</b> {t.temp_c:F1} °C    <b>Humid:</b> {t.humidity:F0} %    <b>Pressure:</b> {t.pressure_hpa:F0} hPa    <b>Heat Idx:</b> {t.heat_index_c:F1} °C";
+                }
+                else
+                {
+                    envMetricsText.text =
+                        $"<b>Pitch:</b> {pitch:F1}°     <b>Roll:</b> {roll:F1}°     <b>Yaw/Hdg:</b> {normHdg:F1}° [ODO]     <b>Load:</b> {load1m:F2}\n" +
+                        $"<b>Board Temp:</b> {dispTemp:F1} °C    <b>CPU Temp:</b> {cpuTemp:F1} °C    <b>RAM:</b> {ramPct:F0} %    <b>Disk:</b> {diskPct:F0} %";
+                }
             }
         }
 
         // 7. Right Wing Card 2: Smart Assist (Exact match to renderSmartAssist in Web app.js)
         int onlineSensorCount = (sensors.ultrasonic ? 1 : 0) + (sensors.bme280 ? 1 : 0) + (sensors.mpu6050 ? 1 : 0) + (sensors.oled ? 1 : 0);
         int score = 0;
-        if (s.serial_connected) score += 25;
-        if (freshTelemetry) score += 25;
-        score += onlineSensorCount * 12;
+        if (espOnline)
+        {
+            score += 50;
+            score += onlineSensorCount * 12;
+        }
+        else
+        {
+            // LIVE-HW Host Compute Readiness Score
+            score = 92;
+            if (s.serial_connected) score += 4;
+            if (dispTemp > 78f) score -= 12;
+        }
         if (dist > 0f && dist < 15f) score -= 20;
         score = Mathf.Clamp(score, 0, 100);
 
+        float curRtt = VResqClient.Instance != null ? VResqClient.Instance.LatencyMs : 12f;
         string scoreColor = score >= 75 ? "#00FF88" : (score >= 45 ? "#FFD166" : "#FF5566");
-        string linkQual = freshTelemetry ? $"<color=#00FF88>{s.last_telem_age_ms:F0} ms live</color>" : "<color=#FF6677>stale/offline</color>";
-        string obsStatus = dist > 0f ? (dist < 15f ? $"<color=#FF5566>close {dist:F0} cm</color>" : $"<color=#00FF88>{dist:F0} cm clear</color>") : "no echo";
-        string busStatus = s.serial_connected ? $"<color=#00FF88>{onlineSensorCount}/4 sensors online</color>" : "<color=#FF6677>ESP32 serial offline</color>";
-        string suggestion = !s.serial_connected
-            ? "Check ESP32 UART / USB serial connection"
-            : (dist > 0f && dist < 20f ? "Obstacle close ahead — Back Out or Turn" : "System nominal — Ready for Teleop / Survey");
+        string linkQual = espOnline
+            ? $"<color=#00FF88>{s.last_telem_age_ms:F0} ms live</color>"
+            : $"<color=#00FF88>WS {curRtt:F0} ms live</color>";
+        string obsStatus = dist > 0f ? (dist < 15f ? $"<color=#FF5566>close {dist:F0} cm</color>" : $"<color=#00FF88>{dist:F0} cm clear</color>") : "clear (no echo)";
+        string busStatus = espOnline
+            ? $"<color=#00FF88>{onlineSensorCount}/4 sensors online</color>"
+            : (s.serial_connected ? $"<color=#FFD166>UART {s.serial_port} (wait ESP32)</color>" : "<color=#00F0FF>Host Compute Online (LIVE-HW)</color>");
+        string suggestion = (dist > 0f && dist < 20f)
+            ? "Obstacle close ahead — Back Out or Turn"
+            : (espOnline ? "ESP32 & Host nominal — Ready for Teleop / Survey" : "Host Compute & Camera Ready — Connect ESP32 for Motor/Sensor I/O");
 
         if (smartAssistText != null)
         {

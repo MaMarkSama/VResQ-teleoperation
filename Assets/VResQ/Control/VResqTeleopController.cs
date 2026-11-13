@@ -547,8 +547,9 @@ namespace VResQ.Control
         public void CycleNextFleetNode()
         {
             if (VResqClient.Instance == null) return;
-            int count = (VResqClient.Instance.fleetNodes != null && VResqClient.Instance.fleetNodes.Length > 0)
-                ? VResqClient.Instance.fleetNodes.Length
+            var cfg = VResqFrameworkConfig.Instance;
+            int count = (cfg != null && cfg.Profile != null && cfg.Profile.fleetNodes != null && cfg.Profile.fleetNodes.Length > 0)
+                ? cfg.Profile.fleetNodes.Length
                 : 3;
             int next = (VResqClient.Instance.ActiveNodeIndex + 1) % count;
             VResqClient.Instance.SwitchToNodeIndex(next);

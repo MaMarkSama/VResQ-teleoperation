@@ -68,7 +68,7 @@ namespace VResQ.Core
         private UdpClient _beaconClient;
         private Thread _beaconThread;
         private HttpClient _probeHttpClient;
-        private string _lastObservedNetworkId = "";
+        private volatile bool _networkChangedPending;
 
         private static float GetNowSeconds() => (float)_clock.Elapsed.TotalSeconds;
 
@@ -76,8 +76,19 @@ namespace VResQ.Core
         {
             if (Instance != null && Instance != this)
             {
-                Destroy(gameObject);
-                return;
+                bool thisIsHudRoot = GetComponent<RescueRobotVRHUD>() != null;
+                bool existingIsHudRoot = Instance.GetComponent<RescueRobotVRHUD>() != null;
+                if (thisIsHudRoot && !existingIsHudRoot)
+                {
+                    VResqAutoDiscovery stale = Instance;
+                    Instance = this;
+                    Destroy(stale);
+                }
+                else
+                {
+                    Destroy(this);
+                    return;
+                }
             }
             Instance = this;
 
@@ -87,6 +98,7 @@ namespace VResQ.Core
         private void OnEnable()
         {
             _cts = new CancellationTokenSource();
+            var token = _cts.Token;
             NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
 
             DetectLocalNetwork();
@@ -96,7 +108,7 @@ namespace VResQ.Core
                 StartUdpBeaconListener();
             }
 
-            Task.Run(() => BackgroundDiscoveryLoopAsync(_cts.Token));
+            Task.Run(() => BackgroundDiscoveryLoopAsync(token));
         }
 
         private void OnDisable()
@@ -111,6 +123,16 @@ namespace VResQ.Core
             // Prune nodes not seen for > 18 seconds (thread-safe monotonic clock)
             float now = GetNowSeconds();
             bool changed = false;
+
+            if (_networkChangedPending)
+            {
+                _networkChangedPending = false;
+                Debug.Log("[VResQ-Discovery] Network address change detected! Re-scanning network...");
+                DetectLocalNetwork();
+                _discoveredNodes.Clear();
+                _cachedList.Clear();
+                changed = true;
+            }
 
             foreach (var kvp in _discoveredNodes)
             {
@@ -136,10 +158,24 @@ namespace VResQ.Core
 
         private void OnNetworkAddressChanged(object sender, EventArgs e)
         {
-            Debug.Log("[VResQ-Discovery] Network address change detected! Re-scanning network...");
-            DetectLocalNetwork();
-            _discoveredNodes.Clear();
-            _cachedList.Clear();
+            _networkChangedPending = true;
+        }
+
+        private static bool IsVirtualOrTunnelAdapter(NetworkInterface ni)
+        {
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) return true;
+            string combined = ((ni.Name ?? "") + " " + (ni.Description ?? "")).ToLowerInvariant();
+            string[] ignored =
+            {
+                "virtual", "vethernet", "wsl", "hyper-v", "vmware", "vbox",
+                "virtualbox", "tailscale", "zerotier", "hamachi", "radmin",
+                "vpn", "wireguard", "tunnel", "bluetooth", "npcap", "loopback"
+            };
+            for (int i = 0; i < ignored.Length; i++)
+            {
+                if (combined.Contains(ignored[i])) return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -150,12 +186,34 @@ namespace VResQ.Core
             try
             {
                 string bestIp = "";
+                int bestScore = int.MinValue;
                 foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
                 {
                     if (ni.OperationalStatus != OperationalStatus.Up) continue;
                     if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
 
                     var ipProps = ni.GetIPProperties();
+                    bool hasIpv4Gateway = false;
+                    foreach (GatewayIPAddressInformation gw in ipProps.GatewayAddresses)
+                    {
+                        if (gw.Address != null &&
+                            gw.Address.AddressFamily == AddressFamily.InterNetwork &&
+                            !IPAddress.Any.Equals(gw.Address) &&
+                            !IPAddress.Loopback.Equals(gw.Address))
+                        {
+                            hasIpv4Gateway = true;
+                            break;
+                        }
+                    }
+
+                    bool isVirtual = IsVirtualOrTunnelAdapter(ni);
+                    int adapterScore = (isVirtual ? -100 : 0) + (hasIpv4Gateway ? 50 : 0);
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ||
+                        ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+                    {
+                        adapterScore += 20;
+                    }
+
                     foreach (UnicastIPAddressInformation addr in ipProps.UnicastAddresses)
                     {
                         if (addr.Address.AddressFamily == AddressFamily.InterNetwork)
@@ -163,12 +221,15 @@ namespace VResQ.Core
                             string ipStr = addr.Address.ToString();
                             if (!ipStr.StartsWith("127.") && !ipStr.StartsWith("169.254."))
                             {
-                                bestIp = ipStr;
+                                if (adapterScore > bestScore)
+                                {
+                                    bestScore = adapterScore;
+                                    bestIp = ipStr;
+                                }
                                 break;
                             }
                         }
                     }
-                    if (!string.IsNullOrEmpty(bestIp)) break;
                 }
 
                 currentLocalIp = !string.IsNullOrEmpty(bestIp) ? bestIp : "127.0.0.1";
@@ -339,24 +400,64 @@ namespace VResQ.Core
 
         private async Task SweepSubnetCandidatesAsync(CancellationToken token)
         {
-            // Sweep .1 through .20 (covers all mobile hotspots e.g. .2, .3, .4, .5, .6, .10) plus common LAN static IPs
-            List<string> candidateIps = new List<string>(24);
-            for (int host = 1; host <= 20; host++)
+            HashSet<string> candidateSet = new HashSet<string>(StringComparer.Ordinal);
+            if (!string.IsNullOrEmpty(currentSubnetPrefix))
             {
-                candidateIps.Add($"{currentSubnetPrefix}.{host}");
+                for (int host = 1; host <= 20; host++)
+                {
+                    candidateSet.Add($"{currentSubnetPrefix}.{host}");
+                }
+                foreach (int extraHost in new[] { 50, 82, 100, 122, 138, 149 })
+                {
+                    candidateSet.Add($"{currentSubnetPrefix}.{extraHost}");
+                }
             }
-            candidateIps.Add($"{currentSubnetPrefix}.50");
-            candidateIps.Add($"{currentSubnetPrefix}.82");
-            candidateIps.Add($"{currentSubnetPrefix}.100");
 
-            List<Task> tasks = new List<Task>(candidateIps.Count);
-            foreach (var ip in candidateIps)
+            // Always probe known LAN & mobile-hotspot node IPs across subnet switches.
+            foreach (string knownIp in new[]
             {
-                if (ip == currentLocalIp) continue;
+                "192.168.1.138", "192.168.1.122", "192.168.1.149",
+                "172.20.10.4", "172.20.10.2", "172.20.10.6", "172.20.10.3"
+            })
+            {
+                candidateSet.Add(knownIp);
+            }
+
+            candidateSet.Remove(currentLocalIp);
+
+            List<Task> tasks = new List<Task>(candidateSet.Count);
+            foreach (string ip in candidateSet)
+            {
                 tasks.Add(ProbeCandidateIpAsync(ip, 8000, token));
             }
-
             await Task.WhenAll(tasks);
+
+            // If no robot answered priority candidates yet, run a bounded /24 fallback sweep in waves of 48.
+            if (_discoveredNodes.IsEmpty && !string.IsNullOrEmpty(currentSubnetPrefix) && !token.IsCancellationRequested)
+            {
+                List<string> remaining = new List<string>(230);
+                for (int host = 1; host <= 254; host++)
+                {
+                    string ip = $"{currentSubnetPrefix}.{host}";
+                    if (ip != currentLocalIp && !candidateSet.Contains(ip))
+                    {
+                        remaining.Add(ip);
+                    }
+                }
+
+                const int batchSize = 48;
+                for (int i = 0; i < remaining.Count && !token.IsCancellationRequested; i += batchSize)
+                {
+                    int count = Math.Min(batchSize, remaining.Count - i);
+                    List<Task> batch = new List<Task>(count);
+                    for (int j = 0; j < count; j++)
+                    {
+                        batch.Add(ProbeCandidateIpAsync(remaining[i + j], 8000, token));
+                    }
+                    await Task.WhenAll(batch);
+                    if (!_discoveredNodes.IsEmpty) break;
+                }
+            }
         }
 
         private async Task ProbeCandidateIpAsync(string ip, int port, CancellationToken token)

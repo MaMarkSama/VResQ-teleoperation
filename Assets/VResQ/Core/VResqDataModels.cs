@@ -61,6 +61,7 @@ namespace VResQ.Core
         public float cpu_temp_c;
         public float display_temp_c;
         public string source = "host_board";
+        public string sensor_source = "host_board";
     }
 
     /// <summary>

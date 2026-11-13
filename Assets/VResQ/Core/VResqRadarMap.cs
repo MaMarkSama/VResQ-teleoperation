@@ -20,8 +20,11 @@ namespace VResQ.Core
         public int textureSize = 256;
         public float maxRangeMeters = 3.0f;
         public float sweepSpeedDegPerSec = 110f;
+        public float redrawRateHz = 20f;
 
         private Texture2D _radarTexture;
+        private float _nextRedrawTime;
+        private float _lastRedrawTime;
         private Color32[] _clearBuffer;
         private Color32[] _renderBuffer;
 
@@ -136,7 +139,15 @@ namespace VResQ.Core
         {
             if (_radarTexture == null) return;
 
-            _currentSweepAngle = (_currentSweepAngle + (sweepSpeedDegPerSec * Time.deltaTime)) % 360f;
+            float interval = redrawRateHz > 0f ? (1f / redrawRateHz) : 0f;
+            float now = Time.unscaledTime;
+            if (interval > 0f && now < _nextRedrawTime) return;
+
+            float dt = _lastRedrawTime > 0f ? Mathf.Max(0.001f, now - _lastRedrawTime) : Time.unscaledDeltaTime;
+            _lastRedrawTime = now;
+            _nextRedrawTime = now + interval;
+
+            _currentSweepAngle = (_currentSweepAngle + (sweepSpeedDegPerSec * dt)) % 360f;
             Array.Copy(_clearBuffer, _renderBuffer, _clearBuffer.Length);
 
             int cx = textureSize / 2;
@@ -222,7 +233,7 @@ namespace VResQ.Core
             DrawLine(cx, cy, cx + (int)(Mathf.Cos(hdgRad) * 16f), cy + (int)(Mathf.Sin(hdgRad) * 16f), _robotColor);
 
             _radarTexture.SetPixels32(_renderBuffer);
-            _radarTexture.Apply();
+            _radarTexture.Apply(false);
 
             if (radarRawImage != null && radarRawImage.texture != _radarTexture)
             {

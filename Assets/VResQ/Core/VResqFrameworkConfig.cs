@@ -35,9 +35,9 @@ namespace VResQ.Core
         // 1. Network & Swarm Fleet
         public RobotNodeEndpoint[] fleetNodes = new RobotNodeEndpoint[]
         {
-            new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "COMMANDER", ipAddress = "172.20.10.4", port = 8000 },
-            new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "RELAY", ipAddress = "172.20.10.2", port = 8000 },
-            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "172.20.10.6", port = 8000 }
+            new RobotNodeEndpoint { displayName = "NODE 0", roleLabel = "COMMANDER", ipAddress = "192.168.1.138", port = 8000 },
+            new RobotNodeEndpoint { displayName = "NODE 1", roleLabel = "RELAY", ipAddress = "192.168.1.122", port = 8000 },
+            new RobotNodeEndpoint { displayName = "NODE 2", roleLabel = "SCOUT", ipAddress = "192.168.1.149", port = 8000 }
         };
         public int defaultNodeIndex = 0;
         public bool autoFallbackToOnlineNode = true;
@@ -145,9 +145,9 @@ namespace VResQ.Core
             {
                 Profile.fleetNodes = new RobotNodeEndpoint[]
                 {
-                    new RobotNodeEndpoint { displayName = "NODE ZERO", roleLabel = "COMMANDER", ipAddress = "172.20.10.4", port = 8000 },
-                    new RobotNodeEndpoint { displayName = "NODE ONE", roleLabel = "RELAY", ipAddress = "172.20.10.2", port = 8000 },
-                    new RobotNodeEndpoint { displayName = "NODE TWO", roleLabel = "SCOUT", ipAddress = "172.20.10.6", port = 8000 }
+                    new RobotNodeEndpoint { displayName = "NODE ZERO", roleLabel = "COMMANDER", ipAddress = "192.168.1.138", port = 8000 },
+                    new RobotNodeEndpoint { displayName = "NODE ONE", roleLabel = "RELAY", ipAddress = "192.168.1.122", port = 8000 },
+                    new RobotNodeEndpoint { displayName = "NODE TWO", roleLabel = "SCOUT", ipAddress = "192.168.1.149", port = 8000 }
                 };
             }
 

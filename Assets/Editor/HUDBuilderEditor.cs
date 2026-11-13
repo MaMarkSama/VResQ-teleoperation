@@ -73,6 +73,20 @@ public class HUDBuilderEditor : EditorWindow
             DestroyImmediate(strayRoot);
             strayRoot = GameObject.Find("Tactical_VR_HUD_Root");
         }
+        foreach (var strayClient in Object.FindObjectsByType<VResqClient>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (strayClient != null && strayClient.gameObject != null) DestroyImmediate(strayClient.gameObject);
+        }
+        foreach (var strayDisc in Object.FindObjectsByType<VResqAutoDiscovery>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (strayDisc != null && strayDisc.gameObject != null) DestroyImmediate(strayDisc.gameObject);
+        }
+        GameObject staleNetworkManager = GameObject.Find("NetworkManager");
+        while (staleNetworkManager != null)
+        {
+            DestroyImmediate(staleNetworkManager);
+            staleNetworkManager = GameObject.Find("NetworkManager");
+        }
 
         // 4. Create Master World-Space Canvas Root
         GameObject hudRoot = new GameObject("Tactical_VR_HUD_Root");
@@ -104,7 +118,7 @@ public class HUDBuilderEditor : EditorWindow
         VResqAutoDiscovery autoDiscovery = hudRoot.AddComponent<VResqAutoDiscovery>();
 
         VResqClient client = hudRoot.AddComponent<VResqClient>();
-        client.robotIp = "172.20.10.4";
+        client.robotIp = "192.168.1.138";
         client.port = 8000;
 
         VResqCameraReceiver camReceiver = hudRoot.AddComponent<VResqCameraReceiver>();
@@ -114,6 +128,7 @@ public class HUDBuilderEditor : EditorWindow
         VResqTeleopController teleop = hudRoot.AddComponent<VResqTeleopController>();
         TacticalHUDFollow follow = hudRoot.AddComponent<TacticalHUDFollow>();
         RescueRobotVRHUD ctrl = hudRoot.AddComponent<RescueRobotVRHUD>();
+        ctrl.surroundDisplay = surround;
 
         if (mainCam != null)
         {
@@ -148,7 +163,7 @@ public class HUDBuilderEditor : EditorWindow
         CreateBorder(topBar.transform, new Vector2(1740f, 108f), cCyanDim, 1.5f);
 
         // Top Row (Y = +28)
-        ctrl.robotIdText = CreateTMP("RobotID", topBar.transform, "● VRESQ-NODE-TWO  [T2-SCOUT]  •  10.66.68.82",
+        ctrl.robotIdText = CreateTMP("RobotID", topBar.transform, "● VRESQ-NODE-ZERO  [T1-COMMANDER]  •  172.20.10.4",
             new Vector2(-615f, 28f), new Vector2(460f, 36f), 19, cCyan, TextAlignmentOptions.Left, true);
         ctrl.themeAccentGraphics.Add(ctrl.robotIdText);
 
@@ -221,9 +236,9 @@ public class HUDBuilderEditor : EditorWindow
         ctrl.nodeCardTexts = new TextMeshProUGUI[3];
 
         string[] defaultLabels = {
-            "<b>[1] NODE 0 (LEADER)</b>\n<size=12>10.66.68.52:8000 • PROBING...</size>",
-            "<b>[2] VRESQ-NODE-ONE (T2-FOLLOWER)</b>\n<size=12>10.66.68.10:8000 • <color=#00FF77>ONLINE</color></size>",
-            "<b>[3] VRESQ-NODE-TWO (T2-SCOUT)</b> <color=#00F0FF>◀ ACTIVE</color>\n<size=12>10.66.68.82:8000 • <color=#00FF77>ONLINE (AI 9.2fps)</color></size>"
+            "<b>[1] VRESQ-NODE-ZERO (T1-COMMANDER)</b> <color=#00F0FF>◀ ACTIVE</color>\n<size=12>172.20.10.4:8000 • <color=#00FF77>ONLINE (LIVE-HW)</color></size>",
+            "<b>[2] VRESQ-NODE-ONE (T2-FOLLOWER)</b>\n<size=12>172.20.10.2:8000 • <color=#00FF77>ONLINE (LIVE-HW)</color></size>",
+            "<b>[3] VRESQ-NODE-TWO (T2-SCOUT)</b>\n<size=12>172.20.10.6:8000 • <color=#00FF77>ONLINE (LIVE-HW)</color></size>"
         };
 
         float[] cardYs = { -16f, -86f, -156f };

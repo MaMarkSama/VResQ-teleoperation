@@ -2,17 +2,33 @@ using UnityEngine;
 
 public class HUDTelemetrySimulator : MonoBehaviour
 {
+    [Tooltip("Disabled in LIVE-HW production mode so fake ping-pong values never overwrite real robot telemetry.")]
+    public bool enableFakeSimulation = false;
+
     private RescueRobotVRHUD hud;
     private float timer = 0f;
 
+    void Awake()
+    {
+        if (!enableFakeSimulation)
+        {
+            enabled = false;
+        }
+    }
+
     void Start()
     {
+        if (!enableFakeSimulation)
+        {
+            enabled = false;
+            return;
+        }
         hud = GetComponent<RescueRobotVRHUD>();
     }
 
     void Update()
     {
-        if (hud == null) return;
+        if (!enableFakeSimulation || hud == null) return;
         timer += Time.deltaTime;
 
         // จำลอง Deadman Switch

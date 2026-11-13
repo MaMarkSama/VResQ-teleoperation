@@ -22,8 +22,8 @@ namespace VResQ.Core
         public static VResqClient Instance { get; private set; }
 
         [Header("Target Robot Connection")]
-        [Tooltip("IP Address of target robot (172.20.10.4, 172.20.10.2, 172.20.10.3)")]
-        public string robotIp = "172.20.10.4";
+        [Tooltip("IP Address of target robot (e.g. 192.168.1.138 / .122 / .149 or 172.20.10.4)")]
+        public string robotIp = "192.168.1.138";
 
         [Tooltip("HTTP & WebSocket Port (Default: 8000)")]
         public int port = 8000;
@@ -77,7 +77,17 @@ namespace VResQ.Core
         {
             if (Instance != null && Instance != this)
             {
-                Destroy(gameObject);
+                bool thisIsHudRoot = GetComponent<RescueRobotVRHUD>() != null;
+                bool existingIsHudRoot = Instance.GetComponent<RescueRobotVRHUD>() != null;
+                if (thisIsHudRoot && !existingIsHudRoot)
+                {
+                    VResqClient stale = Instance;
+                    Instance = this;
+                    Destroy(stale);
+                    return;
+                }
+
+                Destroy(this);
                 return;
             }
             Instance = this;
