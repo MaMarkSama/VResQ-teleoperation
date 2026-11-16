@@ -50,3 +50,19 @@ button wiring.
 
 Windows builds use Mono through AutoBuild_Unity.bat or the V-ResQ build menu.
 Headset passthrough and physical hand gestures require on-device verification.
+
+## Headset Startup Recovery
+
+The latest inspected Editor session reported XR_ERROR_FORM_FACTOR_UNAVAILABLE
+during xrGetSystem. It also failed to create the passthrough camera subsystem.
+The headset was unavailable for live verification during the subsequent fix.
+
+Connect to the PC desktop inside Link before starting the application. If the
+application started before Link was ready, switch Headset view off and on. The
+headset camera controller retries XR initialization when no loader is active and
+rebinds the AR session and camera manager after initialization succeeds.
+
+The status strip distinguishes a missing Link headset, unavailable passthrough
+extension, missing camera subsystem and stopped subsystem. State transitions are
+written to Player.log with the VRESQ_PASSTHROUGH prefix. If Link developer settings
+were changed, restart the application so OpenXR can negotiate extensions again.

@@ -31,6 +31,14 @@ public static class VResqXRInteractionChecks
         Check(module != null && module.enabled && module.enableXRInput && module.enableMouseInput, "XR and mouse input are enabled");
         Check(Camera.main.GetComponent<ARCameraManager>() != null && Camera.main.backgroundColor.a == 0,
             "Headset camera has a transparent passthrough background");
+        var headset = Camera.main.GetComponent<VResqHeadsetPassthrough>();
+        Check(headset != null, "Headset startup recovery and diagnostics are attached");
+        headset.Request(false);
+        Check(headset.Status == "Headset view OFF" && !Camera.main.GetComponent<ARCameraManager>().enabled,
+            "Disabling headset view stops the camera manager");
+        headset.Request(true);
+        Check(Camera.main.GetComponent<ARCameraManager>().enabled && Camera.main.backgroundColor.a == 0,
+            "Enabling headset view restores camera manager and transparency");
         var controls = hud.GetComponent<VResqPresentationControls>();
         hud.WireAllInteractiveButtons();
         controls.nextCameraButton.onClick.Invoke();

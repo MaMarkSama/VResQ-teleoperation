@@ -62,6 +62,7 @@ namespace VResQ.Video
         {
             config.Profile.headsetPassthrough = enabled;
             config.NotifyConfigChanged();
+            if (enabled && viewCamera != null) viewCamera.GetComponent<VResqHeadsetPassthrough>()?.RetryInitialization();
         }
         public void SetMonitor(bool enabled) { config.Profile.robotMonitorVisible = enabled; config.NotifyConfigChanged(); }
         public void SetBrightness(float value) { config.Profile.cameraBrightness = value; config.NotifyConfigChanged(); }
@@ -82,6 +83,7 @@ namespace VResQ.Video
                 viewCamera.backgroundColor = profile.headsetPassthrough ? Color.clear : Color.black;
                 var passthrough = viewCamera.GetComponent<ARCameraManager>();
                 if (passthrough != null) passthrough.enabled = profile.headsetPassthrough;
+                viewCamera.GetComponent<VResqHeadsetPassthrough>()?.Request(profile.headsetPassthrough);
             }
             if (backgroundToggle != null) backgroundToggle.SetIsOnWithoutNotify(profile.headsetPassthrough);
             if (monitorToggle != null) monitorToggle.SetIsOnWithoutNotify(profile.robotMonitorVisible);
@@ -112,6 +114,8 @@ namespace VResQ.Video
             var passthrough = viewCamera != null ? viewCamera.GetComponent<ARCameraManager>() : null;
             string headset = !config.Profile.headsetPassthrough ? "Headset view OFF" :
                 passthrough != null && passthrough.subsystem != null && passthrough.subsystem.running ? "Headset view ON" : "Headset view waiting for Link";
+            var diagnostics = viewCamera != null ? viewCamera.GetComponent<VResqHeadsetPassthrough>() : null;
+            if (diagnostics != null) headset = diagnostics.Status;
             SubsystemManager.GetSubsystems(handSubsystems);
             var hands = handSubsystems.Find(system => system.running);
             string left = hands != null && hands.leftHand.isTracked ? "tracked" : "--";

@@ -99,7 +99,11 @@ namespace VResQ.Core
         {
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
-            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+            try { NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged; }
+            catch (PlatformNotSupportedException)
+            {
+                Debug.LogWarning("[VResQ Discovery] Network change events unavailable; periodic discovery remains active");
+            }
 
             DetectLocalNetwork();
 
@@ -113,7 +117,8 @@ namespace VResQ.Core
 
         private void OnDisable()
         {
-            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            try { NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged; }
+            catch (PlatformNotSupportedException) { }
             _cts?.Cancel();
             StopUdpBeaconListener();
         }

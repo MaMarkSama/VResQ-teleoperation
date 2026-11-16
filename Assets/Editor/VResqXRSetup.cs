@@ -42,6 +42,8 @@ public static class VResqXRSetup
             if (behaviour != null && (behaviour.GetType().Namespace ?? "").Contains(".Locomotion.")) behaviour.enabled = false;
         var camera = xrOrigin.Camera;
         var manager = camera.GetComponent<ARCameraManager>() ?? camera.gameObject.AddComponent<ARCameraManager>();
+        if (camera.GetComponent<VResQ.Video.VResqHeadsetPassthrough>() == null)
+            camera.gameObject.AddComponent<VResQ.Video.VResqHeadsetPassthrough>();
         manager.enabled = true;
         camera.clearFlags = CameraClearFlags.SolidColor;
         camera.backgroundColor = Color.clear;
