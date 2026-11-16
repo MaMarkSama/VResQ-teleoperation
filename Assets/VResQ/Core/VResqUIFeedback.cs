@@ -38,7 +38,12 @@ namespace VResQ.Core
 
         private void Update()
         {
-            if (output != null && Time.unscaledTime > expires) output.text = "";
+            if (output != null && Time.unscaledTime > expires)
+            {
+                var client = GetComponent<VResqClient>();
+                var controller = GetComponent<VResQ.Control.VResqTeleopController>();
+                output.text = $"{controller?.DriveStatus} | WS sent {client.OperatorCommandsSent} | ESP32 cmd RX {client.LastReportedCommandRx} | {client.LastCommandStatus}";
+            }
         }
     }
 }

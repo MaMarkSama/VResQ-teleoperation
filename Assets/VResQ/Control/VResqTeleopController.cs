@@ -6,7 +6,6 @@ using UnityEngine.InputSystem.Controls;
 using UnityEngine.XR;
 using VResQ.Core;
 using VResQ.Video;
-
 namespace VResQ.Control
 {
     /// <summary>
@@ -66,6 +65,27 @@ namespace VResQ.Control
 
         private float _lastSendTime = 0f;
         private bool _wasMoving = false;
+        public bool DriveArmed { get; private set; }
+        public bool NeutralRequired { get; private set; }
+        public string DriveStatus { get; private set; } = "DISARMED";
+        private string armedTarget;
+
+        public void SetDriveArmed(bool armed)
+        {
+            if (armed && Camera.main != null && Camera.main.GetComponent<VResqHeadsetPassthrough>()?.Isolated == true)
+            { DriveStatus = "Cannot arm during headset-only test"; return; }
+            var client = GetComponent<VResqClient>();
+            if (armed && (client == null || !client.ControlAuthenticated || !client.LatestState.motion_authorized || client.StateAgeSeconds > 1.2f))
+            { DriveStatus = "Cannot arm: link / lease / safety / telemetry unavailable"; return; }
+            DriveArmed = armed;
+            NeutralRequired = armed;
+            armedTarget = client != null ? client.robotIp + ":" + client.port : "";
+            DriveStatus = armed ? "ARMED - release stick to neutral" : "DISARMED";
+            if (!armed) { _wasMoving = false; client?.StopOperatorMotion(); client?.SendDriveCommand(0, 0, currentServoDeg, speedScale); }
+        }
+
+        private void OnApplicationFocus(bool focus) { if (!focus) SetDriveArmed(false); }
+        private void OnDisable() { if (Application.isPlaying) SetDriveArmed(false); }
         private int _lastSentServoDeg = 90;
         private float _servoFloatDeg = 90f;
         private float _cameraLookYaw = 0f;
@@ -74,8 +94,6 @@ namespace VResQ.Control
 
         // Edge-trigger states for generic USB joystick buttons
         private readonly bool[] _prevGenericButtons = new bool[16];
-        private bool _prevXrPrimaryBtn = false;
-        private bool _prevXrSecondaryBtn = false;
 
         private void Awake()
         {
@@ -189,12 +207,15 @@ namespace VResQ.Control
             bool estop = false;
             bool gripOrShift = false;
             float speedModifier = 1.0f;
+            var quest = GetComponent<VResqQuestInput>();
+            VResqQuestInput.Frame xrInput = default;
+            bool questActive = quest != null && quest.Sample(this, out xrInput);
 
             // =====================================================================
             // 1. STANDARD GAMEPAD (Xbox / PlayStation / Switch Pro / XInput / 8BitDo)
             // =====================================================================
             Gamepad gp = Gamepad.current;
-            if (gp != null)
+            if (gp != null && !questActive)
             {
                 Vector2 lStick = gp.leftStick.ReadValue();
                 if (lStick.magnitude > stickDeadzone)
@@ -284,7 +305,7 @@ namespace VResQ.Control
             // 2. GENERIC USB JOYSTICK / FLIGHT STICK / DIRECTINPUT CONTROLLER
             // =====================================================================
             Joystick js = Joystick.current;
-            if (js != null && gp == null)
+            if (js != null && gp == null && !questActive)
             {
                 Vector2 stick = js.stick.ReadValue();
                 if (stick.magnitude > stickDeadzone)
@@ -342,62 +363,24 @@ namespace VResQ.Control
             // =====================================================================
             // 3. VR / XR HAND CONTROLLERS (OpenXR / Meta Quest)
             // =====================================================================
-            try
+            if (questActive)
             {
-                _xrDevices.Clear();
-                InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Controller, _xrDevices);
-                foreach (var device in _xrDevices)
-                {
-                    bool isLeft = (device.characteristics & InputDeviceCharacteristics.Left) != 0;
-                    bool isRight = (device.characteristics & InputDeviceCharacteristics.Right) != 0;
-
-                    if (device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primary2DAxis, out Vector2 axis))
-                    {
-                        if (isLeft || (!isLeft && !isRight))
-                        {
-                            if (axis.magnitude > stickDeadzone)
-                            {
-                                linear += axis.y;
-                                angular += axis.x;
-                            }
-                        }
-                        else if (isRight)
-                        {
-                            if (axis.magnitude > stickDeadzone)
-                            {
-                                lookX += axis.x;
-                                lookY += axis.y;
-                            }
-                        }
-                    }
-
-                    if (device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.gripButton, out bool grip) && grip)
-                    {
-                        gripOrShift = true;
-                    }
-
-                    if (isRight)
-                    {
-                        if (device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primaryButton, out bool pBtn))
-                        {
-                            if (pBtn && !_prevXrPrimaryBtn) VResqSurroundDisplay.Instance?.ToggleExternalVsCamera();
-                            _prevXrPrimaryBtn = pBtn;
-                        }
-                        if (device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.secondaryButton, out bool sBtn))
-                        {
-                            if (sBtn && !_prevXrSecondaryBtn) estop = true;
-                            _prevXrSecondaryBtn = sBtn;
-                        }
-                    }
-                }
+                hasPhysicalJoystick = true;
+                activeControllerName = quest.Status;
+                linear = xrInput.drive.y;
+                angular = xrInput.drive.x;
+                lookX = xrInput.look.x;
+                lookY = xrInput.look.y;
+                gripOrShift = xrInput.grip;
+                buzzer = xrInput.horn;
+                estop |= xrInput.estop;
             }
-            catch { }
 
             // =====================================================================
             // 4. KEYBOARD & MOUSE FALLBACK (PC Testing)
             // =====================================================================
             Keyboard kb = Keyboard.current;
-            if (kb != null)
+            if (kb != null && !questActive)
             {
                 if (kb.wKey.isPressed || kb.upArrowKey.isPressed) linear += 1f;
                 if (kb.sKey.isPressed || kb.downArrowKey.isPressed) linear -= 1f;
@@ -447,7 +430,7 @@ namespace VResQ.Control
 
             // Mouse Right-Click Drag for 360° Free-Look on PC
             Mouse mouse = Mouse.current;
-            if (mouse != null && mouse.rightButton.isPressed)
+            if (mouse != null && mouse.rightButton.isPressed && !questActive)
             {
                 Vector2 delta = mouse.delta.ReadValue();
                 lookX += Mathf.Clamp(delta.x * 0.15f, -2.5f, 2.5f);
@@ -469,7 +452,7 @@ namespace VResQ.Control
 
                 // Rotate user camera rig 360° so user can look around the outside world or 360° surround camera!
                 FindCameraRig();
-                if (cameraRigTransform != null)
+                if (cameraRigTransform != null && !questActive)
                 {
                     _cameraLookYaw = (_cameraLookYaw + lookX * lookYawSpeed * Time.deltaTime) % 360f;
                     _cameraLookPitch = Mathf.Clamp(_cameraLookPitch - lookY * lookPitchSpeed * Time.deltaTime, -55f, 55f);
@@ -478,11 +461,21 @@ namespace VResQ.Control
             }
 
             currentServoDeg = Mathf.RoundToInt(_servoFloatDeg);
+            var activeClient = GetComponent<VResqClient>();
+            var operations = GetComponent<VResqOperationsPanel>();
+            var operatorHud = GetComponent<RescueRobotVRHUD>();
+            bool menuOpen = (operations != null && operations.ActiveTab != "Live") || (operatorHud.settingsModalRoot != null && operatorHud.settingsModalRoot.activeSelf);
+            if (DriveArmed && (menuOpen || !Application.isFocused || activeClient == null || !activeClient.ControlAuthenticated ||
+                activeClient.StateAgeSeconds > 1.2f || !activeClient.LatestState.motion_authorized ||
+                armedTarget != activeClient.robotIp + ":" + activeClient.port || (quest != null && quest.LostControllers))) SetDriveArmed(false);
+            if (NeutralRequired && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
+            if (!DriveArmed || NeutralRequired || menuOpen) { linear = 0; angular = 0; buzzer = false; }
+            if (DriveArmed) DriveStatus = NeutralRequired ? "ARMED - release stick to neutral" : "ARMED";
 
             // =====================================================================
             // 6. EVALUATE DEADMAN, LOCAL SIMULATION, AND 20HZ WEBSOCKET TRANSMISSION
             // =====================================================================
-            isDeadmanActive = !requireDeadmanSwitch || gripOrShift;
+            isDeadmanActive = (!requireDeadmanSwitch && !(questActive && VResqFrameworkConfig.Instance.Profile.questGripRequired)) || gripOrShift;
             if (!isDeadmanActive)
             {
                 linear = 0f;
@@ -579,6 +572,12 @@ namespace VResQ.Control
         }
 
         public void ActionScan() => VResqClient.Instance?.SendActionCommand("scan");
+        public void SetServo(int degrees)
+        {
+            _servoFloatDeg = Mathf.Clamp(degrees, 20, 160);
+            currentServoDeg = Mathf.RoundToInt(_servoFloatDeg);
+            GetComponent<VResqClient>()?.SendDriveCommand(0, 0, currentServoDeg, speedScale);
+        }
         public void ActionBeacon() => VResqClient.Instance?.SendActionCommand("beacon");
         public void ActionCenter()
         {
@@ -587,9 +586,10 @@ namespace VResQ.Control
             VResqClient.Instance?.SendActionCommand("center");
         }
         public void ActionApproach() => VResqClient.Instance?.SendActionCommand("approach");
-        public void ActionBackOut() => VResqClient.Instance?.SendActionCommand("back_out");
+        public void ActionBackOut() => VResqClient.Instance?.SendActionCommand("backout");
         public void ActionEmergencyStop()
         {
+            SetDriveArmed(false);
             simulatedLeftPwm = 0;
             simulatedRightPwm = 0;
             VResqClient.Instance?.SendDriveCommand(0, 0, 90, 0.7f, estop: true);

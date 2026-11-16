@@ -70,6 +70,14 @@ namespace VResQ.Core
         public bool enableJoystickControl = true;
         public float speedScale = 0.75f;
         public float stickDeadzone = 0.10f;
+        public bool questGripRequired = true;
+        public bool invertDrive = false;
+        public bool invertSteering = false;
+        public float steeringSensitivity = 1f;
+        public QuestButtonAction questA = QuestButtonAction.HeadsetView;
+        public QuestButtonAction questX = QuestButtonAction.NextCamera;
+        public QuestButtonAction questY = QuestButtonAction.OperatorMenu;
+        public QuestButtonAction questRightClick = QuestButtonAction.CenterServo;
         public bool rightStickControlsLookAndGimbal = true;
         public float lookYawSpeedDegPerSec = 95f;
         public bool requireDeadmanSwitch = false;
@@ -111,10 +119,16 @@ namespace VResQ.Core
 
         public void NotifyConfigChanged()
         {
+            Profile.speedScale = FiniteClamp(Profile.speedScale, .75f, .2f, 1f);
+            Profile.stickDeadzone = FiniteClamp(Profile.stickDeadzone, .1f, .05f, .5f);
+            Profile.steeringSensitivity = FiniteClamp(Profile.steeringSensitivity, 1f, .2f, 1.5f);
             Profile.cameraBrightness = float.IsNaN(Profile.cameraBrightness) || float.IsInfinity(Profile.cameraBrightness)
                 ? 1.2f : Mathf.Clamp(Profile.cameraBrightness, 0.5f, 2f);
             OnConfigChanged?.Invoke();
         }
+
+        private static float FiniteClamp(float value, float fallback, float min, float max) =>
+            float.IsNaN(value) || float.IsInfinity(value) ? fallback : Mathf.Clamp(value, min, max);
 
         public void SaveProfile()
         {

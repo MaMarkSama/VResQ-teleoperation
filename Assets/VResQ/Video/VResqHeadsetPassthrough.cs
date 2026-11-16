@@ -6,6 +6,8 @@ using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.Management;
 using UnityEngine.XR.OpenXR;
 using Newtonsoft.Json.Linq;
+using Unity.XR.CompositionLayers;
+using Unity.XR.CompositionLayers.Layers;
 
 namespace VResQ.Video
 {
@@ -16,12 +18,24 @@ namespace VResQ.Video
         private Coroutine initialization;
         private string lastStatus;
         private float nextLog;
+        private Canvas isolatedCanvas;
+        public bool Isolated => isolatedCanvas != null && !isolatedCanvas.enabled;
+        public void ToggleIsolation(Canvas canvas)
+        {
+            if (Isolated) RestoreHud();
+            else { isolatedCanvas = canvas; canvas.enabled = false; }
+        }
+        public void RestoreHud() { if (isolatedCanvas != null) isolatedCanvas.enabled = true; isolatedCanvas = null; }
 
         public JObject Diagnostics()
         {
             var manager = XRGeneralSettings.Instance != null ? XRGeneralSettings.Instance.Manager : null;
             var cameraManager = GetComponent<ARCameraManager>();
             var features = new JArray();
+            var layers = new JArray();
+            foreach (var layer in FindObjectsByType<CompositionLayer>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                layers.Add(new JObject { ["name"] = layer.name, ["active"] = layer.isActiveAndEnabled, ["order"] = layer.Order,
+                    ["type"] = layer.LayerData?.GetType().Name, ["blend"] = layer.LayerData?.BlendType.ToString() });
             if (OpenXRSettings.Instance != null)
                 foreach (var feature in OpenXRSettings.Instance.GetFeatures<UnityEngine.XR.OpenXR.Features.OpenXRFeature>())
                     if (feature != null) features.Add(new JObject { ["name"] = feature.GetType().Name, ["enabled"] = feature.enabled });
@@ -40,6 +54,8 @@ namespace VResQ.Video
                 ["camera_clear"] = GetComponent<Camera>().clearFlags.ToString(),
                 ["camera_alpha"] = GetComponent<Camera>().backgroundColor.a,
                 ["features"] = features,
+                ["composition_layers"] = layers,
+                ["headset_only_test"] = Isolated,
                 ["log_file"] = Application.consoleLogPath
             };
         }
@@ -128,6 +144,11 @@ namespace VResQ.Video
         {
             if (Time.unscaledTime < nextLog) return;
             nextLog = Time.unscaledTime + 1;
+            // Restore alpha blending after a late XR session or composition-layer restart.
+            if (requested && XRSettings.isDeviceActive)
+                foreach (var layer in FindObjectsByType<CompositionLayer>(FindObjectsSortMode.None))
+                    if (layer.LayerData is DefaultLayerData && layer.LayerData.BlendType != BlendType.Premultiply)
+                        layer.LayerData.BlendType = BlendType.Premultiply;
             string state = Status;
             if (state == lastStatus) return;
             lastStatus = state;

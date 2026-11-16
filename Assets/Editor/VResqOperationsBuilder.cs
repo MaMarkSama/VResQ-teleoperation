@@ -11,6 +11,7 @@ public static class VResqOperationsBuilder
     {
         var view = hud.GetComponent<VResqOperationsPanel>() ?? hud.gameObject.AddComponent<VResqOperationsPanel>();
         ConfigureSettings(hud);
+        if (hud.GetComponent<VResQ.Control.VResqQuestInput>() == null) hud.gameObject.AddComponent<VResQ.Control.VResqQuestInput>();
         foreach (string name in new[] { "Operations_Navigation", "Operations_Data", "Operations_Feedback" })
         {
             var old = hud.transform.Find(name);
@@ -25,10 +26,10 @@ public static class VResqOperationsBuilder
         feedback.output.name = "Operations_Feedback";
         var navigation = Rect("Operations_Navigation", hud.transform, new Vector2(0, 600), new Vector2(1740, 62));
         navigation.gameObject.AddComponent<Image>().color = new Color(.015f, .045f, .055f, .98f);
-        view.tabs = new Button[5];
-        string[] names = { "Live", "Telemetry", "Protocol", "Swarm", "System" };
-        for (int i = 0; i < names.Length; i++) view.tabs[i] = Button(navigation, names[i], -720 + i * 260, 0, 240);
-        Button(navigation, "Settings", 640, 0, 210);
+        view.tabs = new Button[6];
+        string[] names = { "Live", "Telemetry", "Protocol", "Swarm", "System", "Controls" };
+        for (int i = 0; i < names.Length; i++) view.tabs[i] = Button(navigation, names[i], -740 + i * 245, 0, 230);
+        Button(navigation, "Settings", 740, 0, 220);
         // Bind this button persistently because scene reconstruction runs outside Play mode.
         var settingsButton = navigation.Find("Settings").GetComponent<Button>();
         UnityEditor.Events.UnityEventTools.AddPersistentListener(settingsButton.onClick, hud.ToggleSettingsModal);
@@ -39,10 +40,10 @@ public static class VResqOperationsBuilder
         view.heading = Text(panel, "Telemetry", new Vector2(-570, 450), new Vector2(480, 65), 36);
         view.summary = Text(panel, "Waiting for response", new Vector2(0, 350), new Vector2(1610, 92), 24);
         view.status = Text(panel, "No payload", new Vector2(0, 275), new Vector2(1610, 40), 18);
-        var viewport = Rect("Payload_Viewport", panel, new Vector2(-15, -80), new Vector2(1590, 650));
+        var viewport = Rect("Payload_Viewport", panel, new Vector2(-15, -100), new Vector2(1590, 600));
         viewport.gameObject.AddComponent<Image>().color = new Color(.025f, .065f, .075f);
         viewport.gameObject.AddComponent<RectMask2D>();
-        view.body = Text(viewport, "", Vector2.zero, new Vector2(1540, 720), 22);
+        view.body = Text(viewport, "", Vector2.zero, new Vector2(1540, 720), 26);
         var body = view.body.rectTransform;
         body.anchorMin = new Vector2(0, 1);
         body.anchorMax = new Vector2(1, 1);
@@ -64,6 +65,28 @@ public static class VResqOperationsBuilder
         view.pageUpButton = Button(panel, "Page up", 360, -460, 220);
         view.pageDownButton = Button(panel, "Page down", 650, -460, 220);
         view.restartXrButton = Button(panel, "Restart XR", -65, -460, 250);
+        view.rawButton = Button(panel, "Raw JSON", -65, -460, 250);
+        view.controlsPanel = VResqControlsBuilder.Configure(panel);
+        view.controlsPanel.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, -30);
+        var tools = Rect("Swarm_Tools", panel, new Vector2(0, 225), new Vector2(1610, 52));
+        view.swarmTools = tools.gameObject;
+        view.nodeSelector = VResqControlsBuilder.Dropdown(tools, "Node selector", new Vector2(-240, 0), 1010);
+        view.connectNodeButton = Button(tools, "Connect node", 400, 0, 240);
+        view.connectNodeButton.interactable = false;
+        view.scanButton = Button(tools, "Rescan LAN", 675, 0, 240);
+        var plotBackground = Rect("Server_Pose_Map", panel, new Vector2(480, 350), new Vector2(600, 170));
+        plotBackground.gameObject.AddComponent<Image>().color = new Color(.05f, .13f, .14f);
+        var plot = Rect("Positions", plotBackground, Vector2.zero, new Vector2(570, 130));
+        plot.gameObject.AddComponent<CanvasRenderer>();
+        view.swarmPlot = plot.gameObject.AddComponent<VResqSwarmPlot>();
+        view.swarmPlot.raycastTarget = false;
+        // Keep the background on the same visibility switch as the plot.
+        plotBackground.GetComponent<Image>().enabled = false;
+        Text(plot, "Server poses (unvalidated) / green live / amber sim", new Vector2(0, 75), new Vector2(590, 30), 18);
+        view.controlsPanel.SetActive(false);
+        view.swarmTools.SetActive(false);
+        view.swarmPlot.gameObject.SetActive(false);
+        view.rawButton.gameObject.SetActive(false);
         panel.gameObject.SetActive(false);
         hud.hudDensity = RescueRobotVRHUD.HudDensityMode.TacticalExpert;
         EditorUtility.SetDirty(view);

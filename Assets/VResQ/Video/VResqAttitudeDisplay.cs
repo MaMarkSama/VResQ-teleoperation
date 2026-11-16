@@ -25,7 +25,7 @@ namespace VResQ.Video
             var receiver = client.GetComponent<VResqCameraReceiver>();
             if (receiver != null && receiver.HasReceivedLiveFrame && receiver.DisplayedSourceIp == client.robotIp &&
                 receiver.DisplayedMetadata?.telemetry != null) state = receiver.DisplayedMetadata.telemetry;
-            bool valid = state != null && state.telemetry != null && state.telemetry.sensors != null &&
+            bool valid = client.StateAgeSeconds < 1.2f && state != null && state.telemetry != null && state.telemetry.sensors != null &&
                 state.telemetry.sensors.mpu6050 && state.last_telem_age_ms < 1200 &&
                 string.IsNullOrEmpty(VResqTelemetryQuality.Validate(state.telemetry));
             Render(state != null ? state.telemetry : null, valid, Time.unscaledDeltaTime);

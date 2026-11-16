@@ -304,6 +304,7 @@ namespace VResQ.Core
     public class ControlPayload
     {
         public string type = "control";
+        public bool request_ack = true;
         public int sequence = 1;
         public float linear;
         public float angular;
@@ -322,6 +323,7 @@ namespace VResQ.Core
     public class ActionPayload
     {
         public string type = "action";
+        public bool request_ack = true;
         public string action;
 
         public string ToJson()

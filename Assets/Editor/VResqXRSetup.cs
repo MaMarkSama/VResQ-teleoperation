@@ -72,7 +72,7 @@ public static class VResqXRSetup
                 bool metaFeature = ns.Contains("Features.Meta") && (name == "ARCameraFeature" || name == "ARSessionFeature");
                 bool handsFeature = name == "HandTracking" || name == "MetaHandTrackingAim" ||
                     name == "HandInteractionPoses" || name == "HandInteractionProfile" || name == "MetaQuestFeature";
-                if (metaFeature || handsFeature)
+                if (metaFeature || handsFeature || name == "OpenXRCompositionLayersFeature" || name == "OculusTouchControllerProfile")
                 {
                     feature.enabled = true;
                     EditorUtility.SetDirty(feature);

@@ -166,6 +166,8 @@ namespace VResQ.Core
             _networkChangedPending = true;
         }
 
+        public void RequestRescan() { _networkChangedPending = true; }
+
         private static bool IsVirtualOrTunnelAdapter(NetworkInterface ni)
         {
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) return true;

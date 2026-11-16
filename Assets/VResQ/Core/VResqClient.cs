@@ -38,6 +38,9 @@ namespace VResQ.Core
         [SerializeField] private bool isConnected = false;
         public bool IsConnected => isConnected;
         public bool ControlAuthenticated => _authenticated;
+        public float StateAgeSeconds => _lastStateReceivedRealtime > 0 ? Time.realtimeSinceStartup - _lastStateReceivedRealtime : float.PositiveInfinity;
+        public int OperatorCommandsSent { get; private set; }
+        public string LastCommandStatus { get; private set; } = "No operator command";
 
         [SerializeField] private int activeNodeIndex = 0;
         public int ActiveNodeIndex => activeNodeIndex;
@@ -67,6 +70,8 @@ namespace VResQ.Core
         public RobotStateSnapshot LatestState => _latestState;
         public string LastTelemetryError { get; private set; } = "";
         public string LastRawState { get; private set; }
+        public string LastReportedCommandRx { get; private set; } = "unreported";
+        public string LastCommandAck { get; private set; } = "No Jetson ACK (requires updated backend)";
 
         private float _swarmPollTimer = 0f;
         private float _fleetProbeTimer = 0f;
@@ -220,6 +225,11 @@ namespace VResQ.Core
         {
             _connectionGeneration++;
             _authenticated = false;
+            GetComponent<VResQ.Control.VResqTeleopController>()?.SetDriveArmed(false);
+            LastReportedCommandRx = "unreported";
+            LastCommandAck = "No Jetson ACK (requires updated backend)";
+            OperatorCommandsSent = 0;
+            _lastStateReceivedRealtime = 0;
             _cts?.Cancel();
             if (_webSocket != null)
             {
@@ -277,6 +287,12 @@ namespace VResQ.Core
             }
 
             bool changed = (robotIp != newIp || port != newPort);
+            if (changed)
+            {
+                GetComponent<VResQ.Control.VResqTeleopController>()?.SetDriveArmed(false);
+                _latestState = new RobotStateSnapshot();
+                LastRawState = null;
+            }
             robotIp = newIp;
             port = newPort;
 
@@ -297,7 +313,16 @@ namespace VResQ.Core
 
         public void SendDriveCommand(float linear, float angular, int servo = 90, float speed = 0.7f, bool estop = false, bool buzzer = false)
         {
-            if (!_authenticated || _webSocket == null || _webSocket.State != WebSocketState.Open) return;
+            if (float.IsNaN(linear) || float.IsNaN(angular) || float.IsNaN(speed) || float.IsInfinity(linear) || float.IsInfinity(angular) || float.IsInfinity(speed))
+            { LastCommandStatus = "Rejected locally: non-finite command"; return; }
+            if (!_authenticated || _webSocket == null || _webSocket.State != WebSocketState.Open)
+            { LastCommandStatus = "Rejected locally: authenticated WebSocket unavailable"; return; }
+            if (!estop && (Mathf.Abs(linear) > .001f || Mathf.Abs(angular) > .001f))
+            {
+                var controller = GetComponent<VResQ.Control.VResqTeleopController>();
+                if (controller == null || !controller.DriveArmed || controller.NeutralRequired || StateAgeSeconds > 1.2f || !LatestState.motion_authorized)
+                { LastCommandStatus = "Rejected locally: disarmed / neutral / stale / safety"; return; }
+            }
 
             _controlSequence++;
             // Serialize on Unity Main Thread
@@ -313,26 +338,35 @@ namespace VResQ.Core
             };
 
             string json = payload.ToJson();
-            _ = SendRawJsonAsync(json);
+            _ = SendOperatorJsonAsync(json, "drive #" + _controlSequence);
         }
 
         public void ResetEstop()
         {
+            if (!_authenticated) { LastCommandStatus = "Reset requires operator authentication"; return; }
             string json = "{\"type\":\"estop_reset\"}";
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
             {
-                _ = SendRawJsonAsync(json);
+                _ = SendOperatorJsonAsync(json, "E-stop reset request");
             }
-            string url = $"http://{robotIp}:{port}/api/estop/reset";
-            Task.Run(async () =>
-            {
-                try { await _httpClient.PostAsync(url, new StringContent("")); } catch { }
-            });
+        }
+
+        public void StopOperatorMotion()
+        {
+            if (_authenticated) _ = SendOperatorJsonAsync("{\"type\":\"stop\"}", "cancel motion/action");
         }
 
         public void SendActionCommand(string action)
         {
             if (string.IsNullOrEmpty(action)) return;
+            if (action == "back_out") action = "backout";
+            if (!_authenticated) { LastCommandStatus = "Action requires operator authentication"; return; }
+            if (action == "approach" || action == "backout" || action == "return_home" || action == "auto_survey" || action == "patrol" || action == "turn_left" || action == "turn_right" || action == "wiggle")
+            {
+                var controller = GetComponent<VResQ.Control.VResqTeleopController>();
+                if (controller == null || !controller.DriveArmed || StateAgeSeconds > 1.2f || !LatestState.motion_authorized)
+                { LastCommandStatus = "Motion action requires armed, fresh, authorized control"; return; }
+            }
             Debug.Log($"<color=yellow>[VResQ Action]</color> Sending action: {action}");
 
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
@@ -340,44 +374,36 @@ namespace VResQ.Core
                 // Serialize on Unity Main Thread
                 var payload = new ActionPayload { action = action };
                 string json = payload.ToJson();
-                _ = SendRawJsonAsync(json);
+                _ = SendOperatorJsonAsync(json, "action " + action);
             }
             else
             {
-                string url = $"http://{robotIp}:{port}/api/action/{Uri.EscapeDataString(action)}";
-                Task.Run(async () =>
-                {
-                    try { await _httpClient.PostAsync(url, new StringContent("")); } catch { }
-                });
+                LastCommandStatus = "Action rejected: WebSocket unavailable";
             }
         }
 
         public void SendOledPageCommand(int page)
         {
+            if (!_authenticated) { LastCommandStatus = "OLED command requires operator authentication"; return; }
             int safePage = Mathf.Clamp(page, 0, 3);
             string json = $"{{\"type\":\"oled\",\"page\":{safePage}}}";
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
             {
-                _ = SendRawJsonAsync(json);
+                _ = SendOperatorJsonAsync(json, "OLED page " + safePage);
             }
-            string url = $"http://{robotIp}:{port}/api/oled/{safePage}";
-            Task.Run(async () =>
-            {
-                try { await _httpClient.PostAsync(url, new StringContent("")); } catch { }
-            });
         }
 
-        private async Task SendRawJsonAsync(string json)
+        private async Task<bool> SendRawJsonAsync(string json)
         {
             ClientWebSocket socket = _webSocket;
             CancellationToken token = _cts != null ? _cts.Token : CancellationToken.None;
-            if (socket == null || socket.State != WebSocketState.Open) return;
+            if (socket == null || socket.State != WebSocketState.Open) return false;
 
             bool locked = false;
             try
             {
                 locked = await _wsSendLock.WaitAsync(150, token);
-                if (!locked) return;
+                if (!locked) return false;
                 if (!token.IsCancellationRequested && ReferenceEquals(_webSocket, socket) && socket.State == WebSocketState.Open)
                 {
                     byte[] bytes = Encoding.UTF8.GetBytes(json);
@@ -385,14 +411,28 @@ namespace VResQ.Core
                     {
                         deadline.CancelAfter(500);
                         await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, deadline.Token);
+                        return true;
                     }
                 }
             }
-            catch { }
+            catch { return false; }
             finally
             {
                 if (locked) _wsSendLock.Release();
             }
+            return false;
+        }
+
+        private async Task SendOperatorJsonAsync(string json, string description)
+        {
+            int generation = _connectionGeneration;
+            bool sent = await SendRawJsonAsync(json);
+            EnqueueMainThread(() =>
+            {
+                if (generation != _connectionGeneration) return;
+                if (sent) OperatorCommandsSent++;
+                LastCommandStatus = description + (sent ? " sent; awaiting telemetry evidence" : " failed to send");
+            });
         }
 
         private async Task WebSocketLoopAsync(string targetIp, int targetPort, CancellationToken token)
@@ -457,7 +497,7 @@ namespace VResQ.Core
                                     _authenticated = true;
                                     _ = SendRawJsonAsync("{\"type\":\"lease\",\"ttl_s\":0.75}");
                                 }
-                                else ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: false);
+                                else if (!HandleCommandAck(rawJson)) ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: false);
                             });
                         }
                     }
@@ -523,6 +563,9 @@ namespace VResQ.Core
                     if (!string.IsNullOrEmpty(LastTelemetryError)) return;
                     state.ParseRadarPoints(rawJson);
                     _latestState = state;
+                    var document = Newtonsoft.Json.Linq.JObject.Parse(rawJson);
+                    var reported = (document["data"] ?? document).SelectToken("telemetry.esp32_cmd_rx_ok");
+                    LastReportedCommandRx = reported != null && reported.Type == Newtonsoft.Json.Linq.JTokenType.Integer ? reported.ToString() : "unreported";
 
                     float now = Time.realtimeSinceStartup;
                     _lastStateReceivedRealtime = now;
@@ -536,6 +579,21 @@ namespace VResQ.Core
                 LastTelemetryError = "Malformed telemetry payload";
                 Debug.LogWarning($"[VResQ] JSON parse error: {ex.Message}");
             }
+        }
+
+        public bool HandleCommandAck(string json)
+        {
+            try
+            {
+                var message = Newtonsoft.Json.Linq.JObject.Parse(json);
+                if ((string)message["type"] != "command_ack") return false;
+                if ((string)message["scope"] != "jetson" || message["accepted"]?.Type != Newtonsoft.Json.Linq.JTokenType.Boolean)
+                { LastCommandAck = "Malformed command ACK"; return true; }
+                LastCommandAck = "Jetson " + ((bool?)message["accepted"] == true ? "ACCEPTED" : "REJECTED") +
+                    " #" + message["sequence"] + " " + message["action"] + " " + message["reason"];
+                return true;
+            }
+            catch (Newtonsoft.Json.JsonException) { return false; }
         }
 
         private void SetConnected(bool connected)
