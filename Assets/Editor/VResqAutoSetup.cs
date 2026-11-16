@@ -98,6 +98,8 @@ public static class VResqAutoSetup
         Label(reset, "Reset counters", Vector2.zero, new Vector2(120, 32)).fontSize = 14;
         presentation.backgroundToggle.SetIsOnWithoutNotify(config.Profile.headsetPassthrough);
         presentation.monitorToggle.SetIsOnWithoutNotify(config.Profile.robotMonitorVisible);
+        VResqOperationsBuilder.Configure(hud);
+        VResqAttitudeBuilder.Configure(hud);
         EditorUtility.SetDirty(presentation);
         EditorUtility.SetDirty(receiver);
         EditorUtility.SetDirty(surround);

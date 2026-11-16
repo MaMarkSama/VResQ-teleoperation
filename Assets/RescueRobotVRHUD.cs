@@ -310,6 +310,7 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (settingsModalRoot == null) return;
         bool nextState = !settingsModalRoot.activeSelf;
         settingsModalRoot.SetActive(nextState);
+        if (nextState) settingsModalRoot.transform.SetAsLastSibling();
         if (nextState) RefreshConfigModalText();
     }
 
@@ -393,8 +394,8 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (cfgSummaryText == null || _config == null) return;
         var p = _config.Profile;
         string viewDesc = p.viewMode == SurroundViewMode.ExternalWorld
-            ? "EXTERNAL 3D WORLD (มองเห็นรอบนอก)"
-            : $"SURROUND CAMERA {p.surroundArcAngle:F0}° (ภาพจากกล้องรอบตัว)";
+            ? "EXTERNAL 3D WORLD"
+            : $"SURROUND CAMERA {p.surroundArcAngle:F0} deg";
         string deadmanMode = p.requireDeadmanSwitch ? "HOLD TRIGGER/SHIFT" : "100% IMMEDIATE JOYSTICK DRIVE";
         string ctrlName = _teleop != null ? _teleop.ActiveControllerName : "READY";
 
@@ -468,6 +469,8 @@ public class RescueRobotVRHUD : MonoBehaviour
                 viewModeBadgeText.text = "HEADSET PASSTHROUGH";
         }
 
+        var operations = GetComponent<VResQ.Core.VResqOperationsPanel>();
+        if (operations != null && operations.ActiveTab != "Live") return;
         ApplyHudDensityVisuals();
 
         // Feed live robot camera texture to center FPV visor screen

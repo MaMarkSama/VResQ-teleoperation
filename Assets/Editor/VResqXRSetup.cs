@@ -113,6 +113,12 @@ public static class VResqXRSetup
                 graphic.raycastTarget = graphic.gameObject == hud.GetComponent<RescueRobotVRHUD>().settingsModalRoot;
                 EditorUtility.SetDirty(graphic);
             }
+        foreach (var selectable in hud.GetComponentsInChildren<Selectable>(true))
+            if (selectable.targetGraphic != null)
+            {
+                selectable.targetGraphic.raycastTarget = true;
+                EditorUtility.SetDirty(selectable.targetGraphic);
+            }
         var profile = hud.GetComponent<VResqFrameworkConfig>().Profile;
         profile.headsetPassthrough = true;
         profile.backgroundVisible = false;

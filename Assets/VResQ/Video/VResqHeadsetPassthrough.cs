@@ -5,6 +5,7 @@ using UnityEngine.XR;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.Management;
 using UnityEngine.XR.OpenXR;
+using Newtonsoft.Json.Linq;
 
 namespace VResQ.Video
 {
@@ -15,6 +16,33 @@ namespace VResQ.Video
         private Coroutine initialization;
         private string lastStatus;
         private float nextLog;
+
+        public JObject Diagnostics()
+        {
+            var manager = XRGeneralSettings.Instance != null ? XRGeneralSettings.Instance.Manager : null;
+            var cameraManager = GetComponent<ARCameraManager>();
+            var features = new JArray();
+            if (OpenXRSettings.Instance != null)
+                foreach (var feature in OpenXRSettings.Instance.GetFeatures<UnityEngine.XR.OpenXR.Features.OpenXRFeature>())
+                    if (feature != null) features.Add(new JObject { ["name"] = feature.GetType().Name, ["enabled"] = feature.enabled });
+            return new JObject
+            {
+                ["requested"] = requested,
+                ["status"] = Status,
+                ["loader"] = manager?.activeLoader != null ? manager.activeLoader.GetType().Name : "none",
+                ["runtime_name"] = OpenXRRuntime.name,
+                ["runtime_version"] = OpenXRRuntime.version.ToString(),
+                ["passthrough_extension"] = OpenXRRuntime.IsExtensionEnabled("XR_FB_passthrough"),
+                ["ar_session_state"] = ARSession.state.ToString(),
+                ["camera_manager_enabled"] = cameraManager.enabled,
+                ["camera_subsystem"] = cameraManager.subsystem?.subsystemDescriptor.id ?? "none",
+                ["camera_subsystem_running"] = cameraManager.subsystem != null && cameraManager.subsystem.running,
+                ["camera_clear"] = GetComponent<Camera>().clearFlags.ToString(),
+                ["camera_alpha"] = GetComponent<Camera>().backgroundColor.a,
+                ["features"] = features,
+                ["log_file"] = Application.consoleLogPath
+            };
+        }
 
         public string Status
         {
@@ -60,8 +88,24 @@ namespace VResQ.Video
                 initialization = StartCoroutine(InitializeAfterLinkConnects(manager));
         }
 
-        private IEnumerator InitializeAfterLinkConnects(XRManagerSettings manager)
+        public void RestartSession()
         {
+            if (!Application.isPlaying || initialization != null) return;
+            requested = true;
+            var manager = XRGeneralSettings.Instance != null ? XRGeneralSettings.Instance.Manager : null;
+            if (manager != null) initialization = StartCoroutine(InitializeAfterLinkConnects(manager, true));
+        }
+
+        private IEnumerator InitializeAfterLinkConnects(XRManagerSettings manager, bool restart = false)
+        {
+            if (restart)
+            {
+                GetComponent<ARCameraManager>().enabled = false;
+                var previousSession = FindFirstObjectByType<ARSession>();
+                if (previousSession != null) previousSession.enabled = false;
+                manager.StopSubsystems();
+                manager.DeinitializeLoader();
+            }
             yield return null;
             if (manager.activeLoader == null) yield return manager.InitializeLoader();
             if (manager.activeLoader != null)

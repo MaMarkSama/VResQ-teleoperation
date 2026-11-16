@@ -57,6 +57,7 @@ public static class VResqRegressionChecks
         Invoke(hud, "Start");
         Canvas.ForceUpdateCanvases();
         VResqXRInteractionChecks.Run(hud);
+        VResqOperationsChecks.Run(hud);
         var target = new RenderTexture(1440, 900, 24);
         var capture = new Texture2D(1440, 900, TextureFormat.RGB24, false);
         var previousTarget = camera.targetTexture;

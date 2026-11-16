@@ -37,6 +37,7 @@ namespace VResQ.Core
         [Header("Runtime State")]
         [SerializeField] private bool isConnected = false;
         public bool IsConnected => isConnected;
+        public bool ControlAuthenticated => _authenticated;
 
         [SerializeField] private int activeNodeIndex = 0;
         public int ActiveNodeIndex => activeNodeIndex;
