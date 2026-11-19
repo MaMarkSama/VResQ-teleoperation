@@ -25,10 +25,12 @@ namespace VResQ.Core
         [Header("Swarm Fleet Endpoints")]
         public string[] candidateEndpoints = new string[]
         {
+            "http://192.168.1.138:8000",
+            "http://192.168.1.122:8000",
+            "http://192.168.1.149:8000",
             "http://172.20.10.4:8000",
             "http://172.20.10.2:8000",
-            "http://172.20.10.6:8000",
-            "http://172.20.10.3:8000"
+            "http://172.20.10.6:8000"
         };
 
         public int activeEndpointIndex = 0;
@@ -36,7 +38,7 @@ namespace VResQ.Core
         public float pollIntervalSeconds = 1.0f;
 
         [Header("Live Swarm State (Read-Only)")]
-        public string activeLeaderEndpoint = "http://172.20.10.4:8000";
+        public string activeLeaderEndpoint = "http://192.168.1.138:8000";
         public int activeLeaderId = 1;
         public int aliveNodesCount = 0;
         public bool versionSynced = false;
@@ -108,18 +110,25 @@ namespace VResQ.Core
 
         private void StopUdpListener()
         {
-            try { _udpClient?.Close(); } catch { }
+            var client = _udpClient;
             _udpClient = null;
+            if (client != null)
+            {
+                try { client.Close(); } catch { }
+                try { client.Dispose(); } catch { }
+            }
         }
 
         private void UdpListenLoop()
         {
             IPEndPoint remoteEp = new IPEndPoint(IPAddress.Any, 0);
-            while (_running && _udpClient != null)
+            while (_running)
             {
+                var client = _udpClient;
+                if (client == null) break;
                 try
                 {
-                    byte[] data = _udpClient.Receive(ref remoteEp);
+                    byte[] data = client.Receive(ref remoteEp);
                     if (data != null && data.Length > 0)
                     {
                         string raw = Encoding.UTF8.GetString(data);
@@ -153,10 +162,12 @@ namespace VResQ.Core
                         yield return req.SendWebRequest();
                         if (req.result == UnityWebRequest.Result.Success)
                         {
-                            summaryOk = true;
-                            SwarmSummaryResponse summary = JsonUtility.FromJson<SwarmSummaryResponse>(req.downloadHandler.text);
+                            SwarmSummaryResponse summary = null;
+                            try { summary = JsonUtility.FromJson<SwarmSummaryResponse>(req.downloadHandler.text); }
+                            catch (Exception) { }
                             if (summary != null)
                             {
+                                summaryOk = true;
                                 LatestSwarmSummary = summary;
                                 var sb = summary.swarm_summary;
                                 activeLeaderId = (sb != null && sb.leader_robot_id > 0) ? sb.leader_robot_id : (summary.leader_id > 0 ? summary.leader_id : 1);
@@ -204,7 +215,9 @@ namespace VResQ.Core
                             yield return mapReq.SendWebRequest();
                             if (mapReq.result == UnityWebRequest.Result.Success)
                             {
-                                FusedMapResponse map = JsonUtility.FromJson<FusedMapResponse>(mapReq.downloadHandler.text);
+                                FusedMapResponse map = null;
+                                try { map = JsonUtility.FromJson<FusedMapResponse>(mapReq.downloadHandler.text); }
+                                catch (Exception) { }
                                 if (map != null)
                                 {
                                     LatestFusedMap = map;

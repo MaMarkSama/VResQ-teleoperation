@@ -31,18 +31,27 @@ namespace VResQ.Core
             if (remoteCommand && client != null)
                 state = !client.IsConnected ? "Robot link unavailable" : !client.ControlAuthenticated
                     ? "Operator authentication unavailable" : client.LatestState == null || !client.LatestState.motion_authorized ? "Motion not authorized" : "Command requested";
-            output.text = name + " | " + state;
-            output.color = state == "UI received" ? new Color(.5f, 1f, .85f) : new Color(1, .8f, .3f);
+            if (output != null)
+            {
+                output.text = name + " | " + state;
+                output.color = state == "UI received" ? new Color(.5f, 1f, .85f) : new Color(1, .8f, .3f);
+            }
             expires = Time.unscaledTime + 5;
         }
 
+        private float _nextStatusRefresh;
+
         private void Update()
         {
-            if (output != null && Time.unscaledTime > expires)
+            if (output != null && Time.unscaledTime > expires && Time.unscaledTime >= _nextStatusRefresh)
             {
-                var client = GetComponent<VResqClient>();
+                _nextStatusRefresh = Time.unscaledTime + 0.25f;
+                var client = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
                 var controller = GetComponent<VResQ.Control.VResqTeleopController>();
-                output.text = $"{controller?.DriveStatus} | WS sent {client.OperatorCommandsSent} | ESP32 cmd RX {client.LastReportedCommandRx} | {client.LastCommandStatus}";
+                if (client != null)
+                {
+                    output.text = $"{controller?.DriveStatus} | WS sent {client.OperatorCommandsSent} | ESP32 cmd RX {client.LastReportedCommandRx} | {client.LastCommandStatus}";
+                }
             }
         }
     }

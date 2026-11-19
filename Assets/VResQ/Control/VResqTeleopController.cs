@@ -461,12 +461,13 @@ namespace VResQ.Control
             }
 
             currentServoDeg = Mathf.RoundToInt(_servoFloatDeg);
-            var activeClient = GetComponent<VResqClient>();
+            var activeClient = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
             var operations = GetComponent<VResqOperationsPanel>();
             var operatorHud = GetComponent<RescueRobotVRHUD>();
-            bool menuOpen = (operations != null && operations.ActiveTab != "Live") || (operatorHud.settingsModalRoot != null && operatorHud.settingsModalRoot.activeSelf);
+            bool menuOpen = (operations != null && operations.ActiveTab != "Live") ||
+                            (operatorHud != null && operatorHud.settingsModalRoot != null && operatorHud.settingsModalRoot.activeSelf);
             if (DriveArmed && (menuOpen || !Application.isFocused || activeClient == null || !activeClient.ControlAuthenticated ||
-                activeClient.StateAgeSeconds > 1.2f || !activeClient.LatestState.motion_authorized ||
+                activeClient.StateAgeSeconds > 1.2f || activeClient.LatestState == null || !activeClient.LatestState.motion_authorized ||
                 armedTarget != activeClient.robotIp + ":" + activeClient.port || (quest != null && quest.LostControllers))) SetDriveArmed(false);
             if (NeutralRequired && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
             if (!DriveArmed || NeutralRequired || menuOpen) { linear = 0; angular = 0; buzzer = false; }
@@ -475,7 +476,10 @@ namespace VResQ.Control
             // =====================================================================
             // 6. EVALUATE DEADMAN, LOCAL SIMULATION, AND 20HZ WEBSOCKET TRANSMISSION
             // =====================================================================
-            isDeadmanActive = (!requireDeadmanSwitch && !(questActive && VResqFrameworkConfig.Instance.Profile.questGripRequired)) || gripOrShift;
+            bool questGripReq = VResqFrameworkConfig.Instance != null &&
+                                VResqFrameworkConfig.Instance.Profile != null &&
+                                VResqFrameworkConfig.Instance.Profile.questGripRequired;
+            isDeadmanActive = (!requireDeadmanSwitch && !(questActive && questGripReq)) || gripOrShift;
             if (!isDeadmanActive)
             {
                 linear = 0f;
@@ -497,8 +501,8 @@ namespace VResQ.Control
                 simulatedPose += new Vector2(Mathf.Sin(rad), Mathf.Cos(rad)) * (linear * 0.85f * effectiveSpeedScale * Time.deltaTime);
             }
 
-            // Send over WebSocket when connected to a live robot node
-            if (VResqClient.Instance != null && VResqClient.Instance.IsConnected)
+            // Send over WebSocket when connected to a live robot node (always allow E-STOP through!)
+            if (activeClient != null && (activeClient.IsConnected || estop))
             {
                 bool isMoving = (Mathf.Abs(linear) > 0.01f || Mathf.Abs(angular) > 0.01f || buzzer || estop);
                 bool servoChanged = Mathf.Abs(currentServoDeg - _lastSentServoDeg) >= 2;

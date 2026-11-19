@@ -268,9 +268,11 @@ namespace VResQ.Core
             }
         }
 
+        private bool operatorSelectedEndpoint;
         public void SwitchRobot(string newIp, int newPort = 8000)
         {
             if (string.IsNullOrEmpty(newIp)) return;
+            operatorSelectedEndpoint = true;
 
             var cfg = VResqFrameworkConfig.Instance;
             if (cfg != null && cfg.Profile.fleetNodes != null)
@@ -492,12 +494,19 @@ namespace VResQ.Core
                             EnqueueMainThread(() =>
                             {
                                 if (token.IsCancellationRequested || !ReferenceEquals(_webSocket, ws)) return;
-                                if (rawJson.Contains("\"auth_ok\""))
+                                if (rawJson.Contains("\"type\":\"auth_ok\"") || rawJson.Contains("\"type\": \"auth_ok\""))
                                 {
                                     _authenticated = true;
                                     _ = SendRawJsonAsync("{\"type\":\"lease\",\"ttl_s\":0.75}");
                                 }
-                                else if (!HandleCommandAck(rawJson)) ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: false);
+                                else if (rawJson.Contains("\"command_ack\"") && HandleCommandAck(rawJson))
+                                {
+                                    // Handled command ACK
+                                }
+                                else
+                                {
+                                    ProcessIncomingJsonOnMainThread(rawJson, updateRttFromDelta: false);
+                                }
                             });
                         }
                     }
@@ -563,9 +572,9 @@ namespace VResQ.Core
                     if (!string.IsNullOrEmpty(LastTelemetryError)) return;
                     state.ParseRadarPoints(rawJson);
                     _latestState = state;
-                    var document = Newtonsoft.Json.Linq.JObject.Parse(rawJson);
-                    var reported = (document["data"] ?? document).SelectToken("telemetry.esp32_cmd_rx_ok");
-                    LastReportedCommandRx = reported != null && reported.Type == Newtonsoft.Json.Linq.JTokenType.Integer ? reported.ToString() : "unreported";
+                    LastReportedCommandRx = (state.telemetry != null && rawJson.Contains("\"esp32_cmd_rx_ok\""))
+                        ? state.telemetry.esp32_cmd_rx_ok.ToString()
+                        : "unreported";
 
                     float now = Time.realtimeSinceStartup;
                     _lastStateReceivedRealtime = now;
@@ -731,7 +740,7 @@ namespace VResQ.Core
                 }
 
                 // Only auto-failover if not currently connected over WebSocket (prevents switching robots mid-drive)
-                if (!currentOnline && !isConnected && (cfg.Profile.autoFallbackToOnlineNode || initialStartup))
+                if (!operatorSelectedEndpoint && !currentOnline && !isConnected && (cfg.Profile.autoFallbackToOnlineNode || initialStartup))
                 {
                     int bestIdx = -1;
                     for (int i = 0; i < nodes.Length; i++)
@@ -758,6 +767,7 @@ namespace VResQ.Core
                     {
                         Debug.Log($"<color=cyan>[VResQ Seamless Auto-Failover]</color> Target {robotIp} offline -> switching to online {nodes[bestIdx].displayName} ({nodes[bestIdx].ipAddress})!");
                         SwitchToNodeIndex(bestIdx);
+                        operatorSelectedEndpoint = false;
                     }
                 }
 

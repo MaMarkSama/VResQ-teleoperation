@@ -48,9 +48,12 @@ namespace VResQ.Video
             if (backgroundToggle != null) backgroundToggle.onValueChanged.RemoveListener(SetBackground);
             if (monitorToggle != null) monitorToggle.onValueChanged.RemoveListener(SetMonitor);
             if (brightnessSlider != null) brightnessSlider.onValueChanged.RemoveListener(SetBrightness);
-            if (resetDiagnostics != null) resetDiagnostics.onClick.RemoveListener(receiver.ResetDiagnostics);
-            if (nextCameraButton != null) nextCameraButton.onClick.RemoveListener(receiver.CycleCameraSource);
-            if (autoCameraButton != null) autoCameraButton.onClick.RemoveListener(receiver.EnableAutomaticCameraSelection);
+            if (receiver != null)
+            {
+                if (resetDiagnostics != null) resetDiagnostics.onClick.RemoveListener(receiver.ResetDiagnostics);
+                if (nextCameraButton != null) nextCameraButton.onClick.RemoveListener(receiver.CycleCameraSource);
+                if (autoCameraButton != null) autoCameraButton.onClick.RemoveListener(receiver.EnableAutomaticCameraSelection);
+            }
             if (viewCamera != null)
             {
                 viewCamera.clearFlags = originalClearFlags;

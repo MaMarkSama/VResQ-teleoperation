@@ -34,14 +34,17 @@ namespace VResQ.Video
         public void Render(TelemetryData data, bool valid, float deltaTime)
         {
             valid = valid && data != null && string.IsNullOrEmpty(VResqTelemetryQuality.Validate(data));
-            horizonVisibility.alpha = valid ? 1 : .25f;
-            stateLabel.text = valid ? "IMU LIVE" : "IMU UNAVAILABLE";
-            stateLabel.color = valid ? new Color(.3f, 1f, .8f) : new Color(1f, .75f, .3f);
+            if (horizonVisibility != null) horizonVisibility.alpha = valid ? 1 : .25f;
+            if (stateLabel != null)
+            {
+                stateLabel.text = valid ? "IMU LIVE" : "IMU UNAVAILABLE";
+                stateLabel.color = valid ? new Color(.3f, 1f, .8f) : new Color(1f, .75f, .3f);
+            }
             if (!valid)
             {
-                pitchLabel.text = "PITCH --";
-                rollLabel.text = "ROLL --";
-                yawLabel.text = "YAW --";
+                if (pitchLabel != null) pitchLabel.text = "PITCH --";
+                if (rollLabel != null) rollLabel.text = "ROLL --";
+                if (yawLabel != null) yawLabel.text = "YAW --";
                 initialized = false;
                 return;
             }
@@ -49,11 +52,14 @@ namespace VResQ.Video
             pitch = Mathf.Lerp(pitch, data.pitch_deg, blend);
             roll = Mathf.LerpAngle(roll, data.roll_deg, blend);
             initialized = true;
-            horizon.localRotation = Quaternion.Euler(0, 0, -roll);
-            horizon.anchoredPosition = new Vector2(0, -Mathf.Clamp(pitch, -90, 90) * 1.8f);
-            pitchLabel.text = $"PITCH {data.pitch_deg:+0.0;-0.0;0.0} deg";
-            rollLabel.text = $"ROLL {data.roll_deg:+0.0;-0.0;0.0} deg";
-            yawLabel.text = $"YAW {Mathf.Repeat(data.yaw_deg, 360):000.0} deg";
+            if (horizon != null)
+            {
+                horizon.localRotation = Quaternion.Euler(0, 0, -roll);
+                horizon.anchoredPosition = new Vector2(0, -Mathf.Clamp(pitch, -90, 90) * 1.8f);
+            }
+            if (pitchLabel != null) pitchLabel.text = $"PITCH {data.pitch_deg:+0.0;-0.0;0.0} deg";
+            if (rollLabel != null) rollLabel.text = $"ROLL {data.roll_deg:+0.0;-0.0;0.0} deg";
+            if (yawLabel != null) yawLabel.text = $"YAW {Mathf.Repeat(data.yaw_deg, 360):000.0} deg";
         }
     }
 }

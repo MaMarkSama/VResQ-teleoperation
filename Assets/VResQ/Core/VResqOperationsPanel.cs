@@ -103,7 +103,9 @@ namespace VResQ.Core
                 if (section != null && (tab != "Live" || liveVisibility.ContainsKey(section)))
                     section.SetActive(tab == "Live" && liveVisibility[section]);
             var hud = GetComponent<RescueRobotVRHUD>();
-            if (hud.settingsModalRoot != null) hud.settingsModalRoot.SetActive(false);
+            if (hud != null && hud.settingsModalRoot != null) hud.settingsModalRoot.SetActive(false);
+            var activeClient = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
+            if (activeClient != null) source = activeClient.robotIp + ":" + activeClient.port;
             heading.text = tab;
             summary.text = "Waiting for response";
             body.text = "";
@@ -121,7 +123,8 @@ namespace VResQ.Core
         private void Update()
         {
             if (ActiveTab == "Live" || ActiveTab == "Controls") return;
-            var client = GetComponent<VResqClient>();
+            var client = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
+            if (client == null) return;
             string endpoint = client.robotIp + ":" + client.port;
             if (source != endpoint)
             {

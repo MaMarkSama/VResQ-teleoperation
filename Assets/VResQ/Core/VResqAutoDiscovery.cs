@@ -119,12 +119,43 @@ namespace VResQ.Core
         {
             try { NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged; }
             catch (PlatformNotSupportedException) { }
-            _cts?.Cancel();
+            var oldCts = _cts;
+            _cts = null;
+            if (oldCts != null)
+            {
+                try { oldCts.Cancel(); } catch { }
+                try { oldCts.Dispose(); } catch { }
+            }
             StopUdpBeaconListener();
         }
 
+        private void OnDestroy()
+        {
+            try { _probeHttpClient?.Dispose(); } catch { }
+            _probeHttpClient = null;
+        }
+
+        private struct RawDiscoveryItem
+        {
+            public bool isBeacon;
+            public string json;
+            public string ip;
+            public int port;
+        }
+
+        private readonly ConcurrentQueue<RawDiscoveryItem> _rawDiscoveryQueue = new ConcurrentQueue<RawDiscoveryItem>();
+
         private void Update()
         {
+            // Drain background discovery payloads on Unity Main Thread so JsonUtility is always thread-safe.
+            while (_rawDiscoveryQueue.TryDequeue(out var item))
+            {
+                if (item.isBeacon)
+                    ProcessBeaconJsonOnMainThread(item.json, item.ip);
+                else
+                    ProcessSystemPayloadOnMainThread(item.json, item.ip, item.port);
+            }
+
             // Prune nodes not seen for > 18 seconds (thread-safe monotonic clock)
             float now = GetNowSeconds();
             bool changed = false;
@@ -278,36 +309,49 @@ namespace VResQ.Core
 
         private void StopUdpBeaconListener()
         {
-            try { _beaconClient?.Close(); } catch { }
+            var client = _beaconClient;
             _beaconClient = null;
+            if (client != null)
+            {
+                try { client.Close(); } catch { }
+                try { client.Dispose(); } catch { }
+            }
         }
 
         private void UdpBeaconListenLoop()
         {
             IPEndPoint remoteEp = new IPEndPoint(IPAddress.Any, 0);
-            while (_cts != null && !_cts.IsCancellationRequested && _beaconClient != null)
+            while (_cts != null && !_cts.IsCancellationRequested)
             {
+                var client = _beaconClient;
+                if (client == null) break;
                 try
                 {
-                    byte[] data = _beaconClient.Receive(ref remoteEp);
+                    byte[] data = client.Receive(ref remoteEp);
                     if (data != null && data.Length > 0 && data.Length <= 2048)
                     {
                         string json = Encoding.UTF8.GetString(data);
-                        ProcessBeaconJson(json, remoteEp.Address.ToString());
+                        _rawDiscoveryQueue.Enqueue(new RawDiscoveryItem
+                        {
+                            isBeacon = true,
+                            json = json,
+                            ip = remoteEp.Address.ToString(),
+                            port = 8000
+                        });
                     }
                 }
                 catch (SocketException)
                 {
-                    if (_cts != null && _cts.IsCancellationRequested) break;
+                    if (_cts == null || _cts.IsCancellationRequested) break;
                 }
                 catch (Exception)
                 {
-                    if (_cts != null && _cts.IsCancellationRequested) break;
+                    if (_cts == null || _cts.IsCancellationRequested) break;
                 }
             }
         }
 
-        private void ProcessBeaconJson(string json, string sourceIp)
+        private void ProcessBeaconJsonOnMainThread(string json, string sourceIp)
         {
             if (string.IsNullOrEmpty(json) || !json.Contains("vresq")) return;
             try
@@ -477,14 +521,20 @@ namespace VResQ.Core
                     if (res.IsSuccessStatusCode)
                     {
                         string body = await res.Content.ReadAsStringAsync();
-                        ProcessSystemPayload(body, ip, port);
+                        _rawDiscoveryQueue.Enqueue(new RawDiscoveryItem
+                        {
+                            isBeacon = false,
+                            json = body,
+                            ip = ip,
+                            port = port
+                        });
                     }
                 }
             }
             catch (Exception) { }
         }
 
-        private void ProcessSystemPayload(string json, string ip, int port)
+        private void ProcessSystemPayloadOnMainThread(string json, string ip, int port)
         {
             if (string.IsNullOrEmpty(json) || !json.Contains("identity")) return;
             try
@@ -547,30 +597,20 @@ namespace VResQ.Core
 
             if (_cachedList.Count == 0) return;
 
-            List<RobotNodeEndpoint> endpoints = new List<RobotNodeEndpoint>();
-            for (int i = 0; i < _cachedList.Count && i < 3; i++)
+            var endpoints = new List<RobotNodeEndpoint>(cfg.Profile.fleetNodes ?? Array.Empty<RobotNodeEndpoint>());
+            foreach (var d in _cachedList)
             {
-                var d = _cachedList[i];
-                endpoints.Add(new RobotNodeEndpoint
+                if (string.IsNullOrWhiteSpace(d.ipAddress)) continue;
+                var existing = endpoints.Find(n => n != null && n.ipAddress == d.ipAddress && n.port == d.port);
+                if (existing == null)
                 {
-                    displayName = d.nodeName.ToUpper(),
-                    roleLabel = d.role.ToUpper(),
-                    ipAddress = d.ipAddress,
-                    port = d.port,
-                    isOnline = true
-                });
+                    existing = new RobotNodeEndpoint { displayName = d.nodeName, roleLabel = d.role, ipAddress = d.ipAddress, port = d.port };
+                    endpoints.Add(existing);
+                }
+                existing.isOnline = true;
             }
-
             cfg.Profile.fleetNodes = endpoints.ToArray();
             cfg.NotifyConfigChanged();
-
-            // Auto-point VResqClient to first discovered node if not already connected
-            if (VResqClient.Instance != null && !VResqClient.Instance.IsConnected && endpoints.Count > 0)
-            {
-                VResqClient.Instance.robotIp = endpoints[0].ipAddress;
-                VResqClient.Instance.port = endpoints[0].port;
-                VResqClient.Instance.Connect();
-            }
         }
     }
 }

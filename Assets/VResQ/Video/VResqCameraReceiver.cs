@@ -183,7 +183,7 @@ namespace VResQ.Video
 
         private void OnRobotSwitched(string newIp)
         {
-            if (!_automaticCameraSelection) return;
+            _automaticCameraSelection = true;
             int newPort = VResqClient.Instance != null ? VResqClient.Instance.port : 8000;
             if (!string.IsNullOrEmpty(newIp) && (newIp != _preferredIp || newPort != _preferredPort))
             {
@@ -245,14 +245,19 @@ namespace VResQ.Video
                 catch (Exception error)
                 {
                     RejectedFrames++;
+                    _consecutiveRejectedFrames++;
                     lastRejectedMetadata = metadataJson;
                     LastDataError = error.Message;
-                    _rejectedSourceIp = sourceIp;
-                    hasReceivedLiveFrame = false;
+                    if (_consecutiveRejectedFrames >= 5)
+                    {
+                        _rejectedSourceIp = sourceIp;
+                        hasReceivedLiveFrame = false;
+                    }
                     return false;
                 }
                 if (_videoTexture.LoadImage(frameToLoad))
                 {
+                    _consecutiveRejectedFrames = 0;
                     ApplyTextureToTargets(_videoTexture);
                     DisplayedMetadata = metadata;
                     DisplayedSourceIp = sourceIp;
@@ -268,6 +273,8 @@ namespace VResQ.Video
             }
             return false;
         }
+
+        private int _consecutiveRejectedFrames = 0;
 
         private void OnDestroy()
         {
@@ -290,17 +297,24 @@ namespace VResQ.Video
             isStreaming = true;
             string prefIp = _preferredIp;
             int prefPort = _preferredPort;
-            // Snapshot Unity configuration on the main thread before starting network work.
-            string[] candidates = _automaticCameraSelection ? BuildCandidateIpOrder(prefIp) : new[] { prefIp };
-            Task.Run(() => StreamMasterLoopAsync(candidates, prefPort, token));
+            activeCameraSourceIp = prefIp;
+            streamUrl = $"http://{prefIp}:{prefPort}/video_feed";
+            Task.Run(() => StreamMasterLoopAsync(prefIp, prefPort, token));
         }
 
         public void StopStream()
         {
             isStreaming = false;
-            _cts?.Cancel();
+            var oldCts = _cts;
             _cts = null;
+            if (oldCts != null)
+            {
+                try { oldCts.Cancel(); } catch { }
+                try { oldCts.Dispose(); } catch { }
+            }
+            _consecutiveRejectedFrames = 0;
             hasReceivedLiveFrame = false;
+            if (_videoTexture != null && DisplayedSourceIp != null) GeneratePanoramicStandbyPattern(_videoTexture);
             DisplayedMetadata = null;
             DisplayedSourceIp = null;
             RawFrameMetadata = null;
@@ -315,73 +329,15 @@ namespace VResQ.Video
             }
         }
 
-        /// <summary>
-        /// Connects to the preferred robot IP first; if that robot has no camera stream (0 JPEG frames within 2.0s),
-        /// tries the remaining configured fleet endpoints and known LAN/hotspot addresses.
-        /// </summary>
-        private async Task StreamMasterLoopAsync(string[] candidateIps, int preferredPort, CancellationToken token)
+        private async Task StreamMasterLoopAsync(string ip, int port, CancellationToken token)
         {
-            int candidateIdx = 0;
-
             while (!token.IsCancellationRequested)
             {
-                string ip = candidateIps[candidateIdx % candidateIps.Length];
-                int port = preferredPort > 0 ? preferredPort : 8000;
-                activeCameraSourceIp = ip;
-                streamUrl = $"http://{ip}:{port}/video_feed";
-
-                int framesFromThisNode = await StreamSingleNodeTcpAsync(ip, port, token);
-
-                if (token.IsCancellationRequested) break;
-
-                if (framesFromThisNode == 0)
-                {
-                    // Current node didn't produce any JPEG frames (either offline or no physical camera plugged in),
-                    // immediately try the next fleet node!
-                    candidateIdx++;
-                    try { await Task.Delay(150, token); }
-                    catch (OperationCanceledException) { break; }
-                }
-                else
-                {
-                    // Stream was working and disconnected; retry same node first
-                    try { await Task.Delay(300, token); }
-                    catch (OperationCanceledException) { break; }
-                }
+                await StreamSingleNodeTcpAsync(ip, port, token);
+                try { await Task.Delay(500, token); }
+                catch (OperationCanceledException) { break; }
             }
         }
-
-        private static string[] BuildCandidateIpOrder(string preferredIp)
-        {
-            List<string> candidates = new List<string>();
-            if (!string.IsNullOrEmpty(preferredIp))
-            {
-                candidates.Add(preferredIp);
-            }
-
-            // Check dynamically discovered nodes from framework config
-            var cfg = VResqFrameworkConfig.Instance;
-            if (!object.ReferenceEquals(cfg, null) && cfg.Profile != null && cfg.Profile.fleetNodes != null)
-            {
-                foreach (var fn in cfg.Profile.fleetNodes)
-                {
-                    if (fn != null && !string.IsNullOrEmpty(fn.ipAddress) && !candidates.Contains(fn.ipAddress))
-                    {
-                        candidates.Add(fn.ipAddress);
-                    }
-                }
-            }
-
-            // Fallback list of known default nodes (including .6 hotspot DHCP)
-            string[] defaults = { "192.168.1.138", "192.168.1.122", "192.168.1.149", "172.20.10.4", "172.20.10.6", "172.20.10.3", "172.20.10.2" };
-            foreach (var d in defaults)
-            {
-                if (!candidates.Contains(d)) candidates.Add(d);
-            }
-
-            return candidates.ToArray();
-        }
-
         private async Task<int> StreamSingleNodeTcpAsync(string ip, int port, CancellationToken token)
         {
             int decodedFrames = 0;
@@ -392,10 +348,14 @@ namespace VResQ.Video
                 try
                 {
                     tcp.NoDelay = true;
-                    var connect = tcp.ConnectAsync(ip, port);
-                    if (await Task.WhenAny(connect, Task.Delay(1500, token)) != connect)
-                        throw new TimeoutException("Camera connection timed out");
-                    await connect;
+                    using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+                    {
+                        connectCts.CancelAfter(1500);
+                        using (connectCts.Token.Register(() => tcp.Close()))
+                        {
+                            await tcp.ConnectAsync(ip, port);
+                        }
+                    }
                     using (var stream = tcp.GetStream())
                     {
                         string request = $"GET /video_feed HTTP/1.0\r\nHost: {ip}:{port}\r\nConnection: close\r\n\r\n";
@@ -405,14 +365,20 @@ namespace VResQ.Video
                         while (!token.IsCancellationRequested)
                         {
                             if (_rejectedSourceIp == ip) return 0;
-                            var read = reader.ReadAsync(token);
-                            if (await Task.WhenAny(read, Task.Delay(3500, token)) != read)
+                            VResqMjpegReader.Frame frame;
+                            using (var readCts = CancellationTokenSource.CreateLinkedTokenSource(token))
                             {
-                                tcp.Close();
-                                try { await read; } catch { }
-                                throw new TimeoutException("Camera frame timed out");
+                                readCts.CancelAfter(3500);
+                                try
+                                {
+                                    frame = await reader.ReadAsync(readCts.Token);
+                                }
+                                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                                {
+                                    tcp.Close();
+                                    throw new TimeoutException("Camera frame timed out");
+                                }
                             }
-                            var frame = await read;
                             lock (_frameLock)
                             {
                                 if (token.IsCancellationRequested) return decodedFrames;

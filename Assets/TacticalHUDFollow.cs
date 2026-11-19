@@ -61,6 +61,14 @@ public class TacticalHUDFollow : MonoBehaviour
         }
     }
 
+    private void OnDestroy()
+    {
+        if (VResqFrameworkConfig.Instance != null)
+        {
+            VResqFrameworkConfig.Instance.OnConfigChanged.RemoveListener(SyncFromConfig);
+        }
+    }
+
     public void SyncFromConfig()
     {
         var cfg = VResqFrameworkConfig.Instance;

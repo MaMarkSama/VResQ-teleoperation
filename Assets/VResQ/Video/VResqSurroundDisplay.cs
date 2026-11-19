@@ -196,7 +196,11 @@ namespace VResQ.Video
             }
         }
 
-        private void Update()
+        private float _lastMeshArc = -1f;
+        private float _lastMeshRadius = -1f;
+        private float _lastMeshHeight = -1f;
+
+        private void LateUpdate()
         {
             EnsureSurroundScreenReady(forceRebuildMesh: false);
 
@@ -319,7 +323,16 @@ namespace VResQ.Video
             else
             {
                 _screenObject.SetActive(visible);
-                GenerateCurvedMesh(arcAngle, radius, screenHeight);
+                if (!Mathf.Approximately(_lastMeshArc, arcAngle) ||
+                    !Mathf.Approximately(_lastMeshRadius, radius) ||
+                    !Mathf.Approximately(_lastMeshHeight, screenHeight) ||
+                    _screenMesh == null)
+                {
+                    GenerateCurvedMesh(arcAngle, radius, screenHeight);
+                    _lastMeshArc = arcAngle;
+                    _lastMeshRadius = radius;
+                    _lastMeshHeight = screenHeight;
+                }
             }
         }
 
