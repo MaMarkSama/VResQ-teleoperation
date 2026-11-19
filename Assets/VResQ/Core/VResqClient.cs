@@ -143,7 +143,11 @@ namespace VResQ.Core
             if (_authenticated && _leaseTimer >= 0.3f)
             {
                 _leaseTimer = 0f;
-                _ = SendRawJsonAsync("{\"type\":\"renew\",\"ttl_s\":0.75}");
+                bool needAcquire = _latestState != null && !_latestState.motion_authorized &&
+                                   _latestState.serial_connected && !_latestState.estop;
+                _ = SendRawJsonAsync(needAcquire
+                    ? "{\"type\":\"lease\",\"ttl_s\":1.0}"
+                    : "{\"type\":\"renew\",\"ttl_s\":0.75}");
             }
 
             // 1. Periodic Swarm API Poll every 2.5 seconds
@@ -259,7 +263,7 @@ namespace VResQ.Core
             }
             else
             {
-                string[] fallbackIps = { "172.20.10.4", "172.20.10.2", "172.20.10.6" };
+                string[] fallbackIps = { "192.168.1.138", "192.168.1.122", "192.168.1.149" };
                 if (index >= 0 && index < fallbackIps.Length)
                 {
                     activeNodeIndex = index;
@@ -392,6 +396,90 @@ namespace VResQ.Core
             if (_webSocket != null && _webSocket.State == WebSocketState.Open)
             {
                 _ = SendOperatorJsonAsync(json, "OLED page " + safePage);
+            }
+        }
+
+        public void SendBuzzerPulse(float durationSec = 0.45f)
+        {
+            if (!_authenticated || _webSocket == null || _webSocket.State != WebSocketState.Open)
+            {
+                LastCommandStatus = "Horn pulse requires active WebSocket";
+                return;
+            }
+            var controller = GetComponent<VResQ.Control.VResqTeleopController>();
+            int servo = controller != null ? controller.currentServoDeg : 90;
+            float spd = controller != null ? controller.speedScale : 0.75f;
+            SendDriveCommand(0f, 0f, servo, spd, estop: false, buzzer: true);
+            int ms = Mathf.Clamp(Mathf.RoundToInt(durationSec * 1000f), 120, 1500);
+            int gen = _connectionGeneration;
+            Task.Run(async () =>
+            {
+                await Task.Delay(ms);
+                EnqueueMainThread(() =>
+                {
+                    if (gen != _connectionGeneration) return;
+                    SendDriveCommand(0f, 0f, servo, spd, estop: false, buzzer: false);
+                });
+            });
+        }
+
+        public void SendSwarmMissionCommand(string action, string formation = null, string scenario = null)
+        {
+            if (string.IsNullOrEmpty(action)) return;
+            var body = new Newtonsoft.Json.Linq.JObject { ["action"] = action };
+            if (!string.IsNullOrEmpty(formation)) body["formation"] = formation;
+            if (!string.IsNullOrEmpty(scenario)) body["scenario"] = scenario;
+            _ = PostJsonEndpointAsync("/api/swarm/mission", body.ToString(Newtonsoft.Json.Formatting.None), "swarm " + action);
+        }
+
+        public void SendMotorTestCommand(string pattern = "both", int pwm = 150, float seconds = 0.30f)
+        {
+            var body = new Newtonsoft.Json.Linq.JObject
+            {
+                ["pattern"] = string.IsNullOrEmpty(pattern) ? "both" : pattern,
+                ["pwm"] = Mathf.Clamp(pwm, 60, 220),
+                ["seconds"] = Mathf.Clamp(seconds, 0.15f, 1.5f)
+            };
+            _ = PostJsonEndpointAsync("/api/motor_test", body.ToString(Newtonsoft.Json.Formatting.None), "motor_test " + pattern);
+        }
+
+        public void SendAiConfigCommand(bool enabled)
+        {
+            var body = new Newtonsoft.Json.Linq.JObject { ["enabled"] = enabled };
+            _ = PostJsonEndpointAsync("/api/ai/config", body.ToString(Newtonsoft.Json.Formatting.None), enabled ? "AI ON" : "AI OFF");
+        }
+
+        private async Task PostJsonEndpointAsync(string path, string jsonBody, string label)
+        {
+            string url = $"http://{robotIp}:{port}{path}";
+            int gen = _connectionGeneration;
+            try
+            {
+                using (var req = new HttpRequestMessage(HttpMethod.Post, url))
+                {
+                    req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+                    if (!string.IsNullOrEmpty(_operatorToken))
+                        req.Headers.Add("X-VResQ-Token", _operatorToken);
+                    using (var res = await _httpClient.SendAsync(req))
+                    {
+                        bool ok = res.IsSuccessStatusCode;
+                        int code = (int)res.StatusCode;
+                        EnqueueMainThread(() =>
+                        {
+                            if (gen != _connectionGeneration) return;
+                            if (ok) OperatorCommandsSent++;
+                            LastCommandStatus = ok ? $"{label} accepted (HTTP {code})" : $"{label} rejected (HTTP {code})";
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                EnqueueMainThread(() =>
+                {
+                    if (gen != _connectionGeneration) return;
+                    LastCommandStatus = $"{label} failed: {ex.Message}";
+                });
             }
         }
 

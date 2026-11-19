@@ -6,7 +6,7 @@ using VResQ.Video;
 
 namespace VResQ.Core
 {
-    public enum QuestButtonAction { None, HeadsetView, NextCamera, OperatorMenu, CenterServo, NextRobot, Protocol, Swarm, Horn }
+    public enum QuestButtonAction { None, HeadsetView, NextCamera, OperatorMenu, CenterServo, NextRobot, Protocol, Swarm, Horn, SpecialOps, ArmToggle }
 }
 
 namespace VResQ.Control
@@ -26,7 +26,8 @@ namespace VResQ.Control
             devices.Clear();
             InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.Controller, devices);
             bool left = false, right = false;
-            var profile = GetComponent<VResqFrameworkConfig>().Profile;
+            var cfg = GetComponent<VResqFrameworkConfig>();
+            var profile = cfg != null ? cfg.Profile : new VResqProfileData();
             foreach (var device in devices)
             {
                 if (!device.isValid || (device.TryGetFeatureValue(CommonUsages.isTracked, out bool tracked) && !tracked)) continue;
@@ -85,15 +86,20 @@ namespace VResQ.Control
             if (action == QuestButtonAction.Horn) { device.TryGetFeatureValue(usage, out bool held); frame.horn |= held; return; }
             if (!Edge(device, key, usage)) return;
             var view = GetComponent<VResqOperationsPanel>();
+            var cfg = GetComponent<VResqFrameworkConfig>();
             switch (action)
             {
-                case QuestButtonAction.HeadsetView: GetComponent<VResqPresentationControls>().SetBackground(!GetComponent<VResqFrameworkConfig>().Profile.headsetPassthrough); break;
-                case QuestButtonAction.NextCamera: GetComponent<VResqCameraReceiver>().CycleCameraSource(); break;
+                case QuestButtonAction.HeadsetView:
+                    if (cfg != null) GetComponent<VResqPresentationControls>()?.SetBackground(!cfg.Profile.headsetPassthrough);
+                    break;
+                case QuestButtonAction.NextCamera: GetComponent<VResqCameraReceiver>()?.CycleCameraSource(); break;
                 case QuestButtonAction.OperatorMenu: ToggleMenu(); break;
-                case QuestButtonAction.CenterServo: teleop.ActionCenter(); break;
-                case QuestButtonAction.NextRobot: teleop.SetDriveArmed(false); teleop.CycleNextFleetNode(); break;
-                case QuestButtonAction.Protocol: view.Show("Protocol"); break;
-                case QuestButtonAction.Swarm: view.Show("Swarm"); break;
+                case QuestButtonAction.CenterServo: teleop?.ActionCenter(); break;
+                case QuestButtonAction.NextRobot: teleop?.SetDriveArmed(false); teleop?.CycleNextFleetNode(); break;
+                case QuestButtonAction.Protocol: view?.Show("Protocol"); break;
+                case QuestButtonAction.Swarm: view?.Show("Swarm"); break;
+                case QuestButtonAction.SpecialOps: GetComponent<VResQ.HMI.VResqSpecialCommandsPanel>()?.ToggleDrawer(); break;
+                case QuestButtonAction.ArmToggle: if (teleop != null) teleop.SetDriveArmed(!teleop.DriveArmed); break;
             }
         }
 
@@ -101,7 +107,7 @@ namespace VResQ.Control
         {
             Camera.main?.GetComponent<VResqHeadsetPassthrough>()?.RestoreHud();
             var view = GetComponent<VResqOperationsPanel>();
-            view.Show(view.ActiveTab == "Controls" ? "Live" : "Controls");
+            if (view != null) view.Show(view.ActiveTab == "Controls" ? "Live" : "Controls");
         }
     }
 }

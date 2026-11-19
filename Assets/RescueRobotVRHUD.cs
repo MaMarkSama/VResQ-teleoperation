@@ -199,6 +199,10 @@ public class RescueRobotVRHUD : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (_config != null)
+        {
+            _config.OnConfigChanged.RemoveListener(ApplyFrameworkVisuals);
+        }
         if (VResqClient.Instance != null)
         {
             VResqClient.Instance.OnStateReceived.RemoveListener(OnRobotStateReceived);

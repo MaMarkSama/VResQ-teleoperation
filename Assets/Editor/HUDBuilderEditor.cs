@@ -581,11 +581,13 @@ public class HUDBuilderEditor : EditorWindow
         {
             EditorSceneManager.OpenScene("Assets/Scenes/BasicScene.unity");
             RebuildSceneCleanly();
+            VResqAutoSetup.RepairActiveScene();
         }
 
         // 2. Rebuild SampleScene.unity and keep it as the active scene
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         RebuildSceneCleanly();
+        VResqAutoSetup.RepairActiveScene();
 
         // 3. Live Runtime Verification Test inside Unity's Mono Runtime
         var client = Object.FindFirstObjectByType<VResqClient>();

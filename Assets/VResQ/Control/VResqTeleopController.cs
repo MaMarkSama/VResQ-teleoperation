@@ -70,17 +70,29 @@ namespace VResQ.Control
         public string DriveStatus { get; private set; } = "DISARMED";
         private string armedTarget;
 
+        private float _nextObstacleHapticAt = 0f;
+
         public void SetDriveArmed(bool armed)
         {
             if (armed && Camera.main != null && Camera.main.GetComponent<VResqHeadsetPassthrough>()?.Isolated == true)
             { DriveStatus = "Cannot arm during headset-only test"; return; }
-            var client = GetComponent<VResqClient>();
-            if (armed && (client == null || !client.ControlAuthenticated || !client.LatestState.motion_authorized || client.StateAgeSeconds > 1.2f))
-            { DriveStatus = "Cannot arm: link / lease / safety / telemetry unavailable"; return; }
+            var client = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
+            if (armed && (client == null || !client.ControlAuthenticated || client.LatestState == null || !client.LatestState.motion_authorized || client.StateAgeSeconds > 1.2f))
+            {
+                DriveStatus = "Cannot arm: link / lease / safety / telemetry unavailable";
+                if (Application.isPlaying) VResQ.HMI.VResqHMIFeedback.Instance?.PlayWarningPulse();
+                return;
+            }
+            bool changed = DriveArmed != armed;
             DriveArmed = armed;
             NeutralRequired = armed;
             armedTarget = client != null ? client.robotIp + ":" + client.port : "";
             DriveStatus = armed ? "ARMED - release stick to neutral" : "DISARMED";
+            if (Application.isPlaying && changed)
+            {
+                if (armed) VResQ.HMI.VResqHMIFeedback.Instance?.PlayArmChime();
+                else VResQ.HMI.VResqHMIFeedback.Instance?.PlayDisarmChime();
+            }
             if (!armed) { _wasMoving = false; client?.StopOperatorMotion(); client?.SendDriveCommand(0, 0, currentServoDeg, speedScale); }
         }
 
@@ -214,15 +226,17 @@ namespace VResQ.Control
             // =====================================================================
             // 1. STANDARD GAMEPAD (Xbox / PlayStation / Switch Pro / XInput / 8BitDo)
             // =====================================================================
+            var profile = VResqFrameworkConfig.Instance != null ? VResqFrameworkConfig.Instance.Profile : null;
+            float cfgSteering = profile != null ? profile.steeringSensitivity : 1.0f;
+            bool cfgInvDrive = profile != null && profile.invertDrive;
+            bool cfgInvSteer = profile != null && profile.invertSteering;
+
             Gamepad gp = Gamepad.current;
             if (gp != null && !questActive)
             {
-                Vector2 lStick = gp.leftStick.ReadValue();
-                if (lStick.magnitude > stickDeadzone)
-                {
-                    linear += lStick.y;
-                    angular += lStick.x;
-                }
+                Vector2 shapedL = VResqQuestInput.ShapeDrive(gp.leftStick.ReadValue(), stickDeadzone, cfgSteering, cfgInvDrive, cfgInvSteer);
+                linear += shapedL.y;
+                angular += shapedL.x;
 
                 Vector2 rStick = gp.rightStick.ReadValue();
                 if (rStick.magnitude > stickDeadzone)
@@ -231,9 +245,10 @@ namespace VResQ.Control
                     lookY += rStick.y;
                 }
 
-                // Triggers: RT = Turbo Boost (100%), LT = Precision Crawl (45%)
+                // Triggers: RT = Turbo Boost (100%), LT = Precision Crawl (45%) & Special Combo Modifier
                 float rt = gp.rightTrigger.ReadValue();
                 float lt = gp.leftTrigger.ReadValue();
+                bool ltHeld = lt > 0.35f;
                 if (rt > 0.15f)
                 {
                     gripOrShift = true;
@@ -252,29 +267,47 @@ namespace VResQ.Control
                 }
                 if (gp.leftShoulder.wasPressedThisFrame)
                 {
+                    SetDriveArmed(false);
                     CycleNextFleetNode();
                 }
 
-                // Face Buttons:
-                // Y / Triangle (Button North): Instant Toggle มองเห็นรอบนอก (External World) <-> ภาพจากกล้องรอบตัว (Surround Camera)
+                // Face Buttons (Hold LT for Special Ops Shortcuts!):
                 if (gp.buttonNorth.wasPressedThisFrame)
                 {
-                    VResqSurroundDisplay.Instance?.ToggleExternalVsCamera();
+                    if (ltHeld) VResQ.HMI.VResqSpecialCommandsPanel.Instance?.ToggleDrawer();
+                    else VResqSurroundDisplay.Instance?.ToggleExternalVsCamera();
                 }
-                // B / Circle (Button East): Emergency Stop
+                // B / Circle (Button East): Emergency Stop + Disarm
                 if (gp.buttonEast.wasPressedThisFrame)
                 {
                     estop = true;
+                    SetDriveArmed(false);
+                    VResQ.HMI.VResqHMIFeedback.Instance?.PlayWarningPulse();
+                    VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast("GAMEPAD E-STOP", "Emergency halt triggered [B]", new Color(1f, 0.22f, 0.28f), 2.8f);
                 }
-                // X / Square (Button West): SOS Buzzer / Horn
-                if (gp.buttonWest.isPressed)
+                // X / Square (Button West): LT+X = Radar Sweep, X hold = Horn/Buzzer
+                if (ltHeld && gp.buttonWest.wasPressedThisFrame)
+                {
+                    VResqClient.Instance?.SendActionCommand("radar_sweep");
+                    VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast("GAMEPAD SPECIAL: RADAR SWEEP", "LT + X triggered sonar scan", new Color(0f, 0.92f, 1f), 2.2f);
+                }
+                else if (!ltHeld && gp.buttonWest.isPressed)
                 {
                     buzzer = true;
                 }
-                // A / Cross (Button South): Autonomous Scan Area
+                // A / Cross (Button South): LT+A = Reset E-STOP, A = Autonomous Area Scan
                 if (gp.buttonSouth.wasPressedThisFrame)
                 {
-                    ActionScan();
+                    if (ltHeld)
+                    {
+                        VResqClient.Instance?.ResetEstop();
+                        VResQ.HMI.VResqHMIFeedback.Instance?.PlayArmChime();
+                        VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast("RESET E-STOP", "LT + A cleared E-STOP latch", new Color(0.1f, 1f, 0.55f), 2.2f);
+                    }
+                    else
+                    {
+                        ActionScan();
+                    }
                 }
 
                 // D-Pad: Up/Down = Adjust Speed Limit, Left/Right = Gimbal Servo Pan
@@ -284,20 +317,34 @@ namespace VResQ.Control
                 if (gp.dpad.right.isPressed) _servoFloatDeg = Mathf.Clamp(_servoFloatDeg + 60f * Time.deltaTime, 20f, 160f);
 
                 // Stick Clicks & Menu/Start/Select:
+                // L3 (Left Stick Click): ARM / DISARM DRIVE (matches Quest LClick!)
+                if (gp.leftStickButton.wasPressedThisFrame)
+                {
+                    SetDriveArmed(!DriveArmed);
+                    VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast(
+                        DriveArmed ? "JOYSTICK ARMED [L3]" : "JOYSTICK DISARMED [L3]",
+                        DriveStatus,
+                        DriveArmed ? new Color(0.1f, 1f, 0.55f) : new Color(1f, 0.78f, 0.18f), 2.4f);
+                }
                 if (gp.rightStickButton.wasPressedThisFrame)
                 {
                     ActionCenter();
                     ResetLookOrientation();
                 }
-                if (gp.leftStickButton.wasPressedThisFrame || gp.selectButton.wasPressedThisFrame)
+                if (gp.selectButton.wasPressedThisFrame)
                 {
                     var hud = FindFirstObjectByType<RescueRobotVRHUD>();
                     if (hud != null) hud.ToggleHudDensity();
                 }
                 if (gp.startButton.wasPressedThisFrame)
                 {
-                    var hud = FindFirstObjectByType<RescueRobotVRHUD>();
-                    if (hud != null) hud.ToggleSettingsModal();
+                    var specialPanel = VResQ.HMI.VResqSpecialCommandsPanel.Instance;
+                    if (specialPanel != null) specialPanel.ToggleDrawer();
+                    else
+                    {
+                        var hud = FindFirstObjectByType<RescueRobotVRHUD>();
+                        if (hud != null) hud.ToggleSettingsModal();
+                    }
                 }
             }
 
@@ -307,12 +354,9 @@ namespace VResQ.Control
             Joystick js = Joystick.current;
             if (js != null && gp == null && !questActive)
             {
-                Vector2 stick = js.stick.ReadValue();
-                if (stick.magnitude > stickDeadzone)
-                {
-                    linear += stick.y;
-                    angular += stick.x;
-                }
+                Vector2 shapedJs = VResqQuestInput.ShapeDrive(js.stick.ReadValue(), stickDeadzone, cfgSteering, cfgInvDrive, cfgInvSteer);
+                linear += shapedJs.y;
+                angular += shapedJs.x;
 
                 // Read secondary axes (twist / rx / ry / z) if available
                 float twist = js.twist != null ? js.twist.ReadValue() : 0f;
@@ -344,16 +388,16 @@ namespace VResQ.Control
                         _prevGenericButtons[btnIdx] = pressed;
 
                         if (btnIdx == 0 && justPressed) ActionScan(); // Button 1: Scan
-                        else if (btnIdx == 1 && justPressed) estop = true; // Button 2: E-Stop
+                        else if (btnIdx == 1 && justPressed) { estop = true; SetDriveArmed(false); } // Button 2: E-Stop
                         else if (btnIdx == 2 && pressed) buzzer = true; // Button 3: Buzzer
                         else if (btnIdx == 3 && justPressed) VResqSurroundDisplay.Instance?.ToggleExternalVsCamera(); // Button 4: Toggle External vs Surround Camera
-                        else if (btnIdx == 4 && justPressed) CycleNextFleetNode(); // Button 5 (L1): Switch Robot
+                        else if (btnIdx == 4 && justPressed) { SetDriveArmed(false); CycleNextFleetNode(); } // Button 5 (L1): Switch Robot
                         else if (btnIdx == 5 && justPressed) VResqSurroundDisplay.Instance?.CycleNextViewMode(); // Button 6 (R1): Cycle Surround Mode
-                        else if (btnIdx == 6 && justPressed) ResetLookOrientation(); // Button 7 (Select): Recenter
+                        else if (btnIdx == 6 && justPressed) SetDriveArmed(!DriveArmed); // Button 7: ARM / DISARM Drive
                         else if (btnIdx == 7 && justPressed)
                         {
-                            var hud = FindFirstObjectByType<RescueRobotVRHUD>();
-                            if (hud != null) hud.ToggleSettingsModal();
+                            var specialPanel = VResQ.HMI.VResqSpecialCommandsPanel.Instance;
+                            if (specialPanel != null) specialPanel.ToggleDrawer();
                         }
                         btnIdx++;
                     }
@@ -361,7 +405,7 @@ namespace VResQ.Control
             }
 
             // =====================================================================
-            // 3. VR / XR HAND CONTROLLERS (OpenXR / Meta Quest)
+            // 3. VR / XR HAND CONTROLLERS (OpenXR / Meta Quest) + HAND-DRIVE MERGE
             // =====================================================================
             if (questActive)
             {
@@ -374,6 +418,18 @@ namespace VResQ.Control
                 gripOrShift = xrInput.grip;
                 buzzer = xrInput.horn;
                 estop |= xrInput.estop;
+            }
+
+            var handGestures = VResqHandGestureController.Instance != null ? VResqHandGestureController.Instance : GetComponent<VResqHandGestureController>();
+            if (handGestures != null && handGestures.HasActiveHandDrive)
+            {
+                linear = Mathf.Clamp(linear + handGestures.HandDriveInput.y, -1f, 1f);
+                angular = Mathf.Clamp(angular + handGestures.HandDriveInput.x, -1f, 1f);
+                gripOrShift = true;
+            }
+            if (handGestures != null && Mathf.Abs(handGestures.HandServoDeltaDegPerSec) > 0.5f)
+            {
+                _servoFloatDeg = Mathf.Clamp(_servoFloatDeg + handGestures.HandServoDeltaDegPerSec * Time.deltaTime, 20f, 160f);
             }
 
             // =====================================================================
@@ -391,8 +447,30 @@ namespace VResQ.Control
                 if (kb.eKey.isPressed) _servoFloatDeg = Mathf.Clamp(_servoFloatDeg + 55f * Time.deltaTime, 20f, 160f);
 
                 if (kb.bKey.isPressed) buzzer = true;
-                if (kb.spaceKey.wasPressedThisFrame) estop = true;
+                if (kb.spaceKey.wasPressedThisFrame) { estop = true; SetDriveArmed(false); }
                 if (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed) gripOrShift = true;
+
+                // Enter or L: ARM / DISARM Drive
+                if (kb.enterKey.wasPressedThisFrame || kb.lKey.wasPressedThisFrame)
+                {
+                    SetDriveArmed(!DriveArmed);
+                    VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast(
+                        DriveArmed ? "DRIVE ARMED [KEYBOARD]" : "DRIVE DISARMED [KEYBOARD]",
+                        DriveStatus,
+                        DriveArmed ? new Color(0.1f, 1f, 0.55f) : new Color(1f, 0.78f, 0.18f), 2.4f);
+                }
+                // G: Reset E-STOP
+                if (kb.gKey.wasPressedThisFrame)
+                {
+                    VResqClient.Instance?.ResetEstop();
+                    VResQ.HMI.VResqHMIFeedback.Instance?.PlayArmChime();
+                    VResQ.HMI.VResqHMIFeedback.Instance?.ShowToast("RESET E-STOP [G]", "Clearing E-STOP latch on active robot", new Color(0.1f, 1f, 0.55f), 2.2f);
+                }
+                // O: Toggle Special Ops & Hand Gesture Command Drawer
+                if (kb.oKey.wasPressedThisFrame)
+                {
+                    VResQ.HMI.VResqSpecialCommandsPanel.Instance?.ToggleDrawer();
+                }
 
                 // F: Instant Toggle มองเห็นรอบนอก (External World) <-> ภาพจากกล้องรอบตัว (Surround Camera)
                 if (kb.fKey.wasPressedThisFrame)
@@ -506,8 +584,8 @@ namespace VResQ.Control
             {
                 bool isMoving = (Mathf.Abs(linear) > 0.01f || Mathf.Abs(angular) > 0.01f || buzzer || estop);
                 bool servoChanged = Mathf.Abs(currentServoDeg - _lastSentServoDeg) >= 2;
-                bool macroActive = VResqClient.Instance.LatestState != null &&
-                                   !string.IsNullOrEmpty(VResqClient.Instance.LatestState.active_action);
+                bool macroActive = activeClient.LatestState != null &&
+                                   !string.IsNullOrEmpty(activeClient.LatestState.active_action);
 
                 // Do not spam zero commands over an active macro unless the operator moves the stick or triggers E-STOP
                 if (!macroActive || isMoving || estop)
@@ -521,7 +599,7 @@ namespace VResQ.Control
                         _wasMoving = isMoving;
                         _lastSentServoDeg = currentServoDeg;
 
-                        VResqClient.Instance.SendDriveCommand(
+                        activeClient.SendDriveCommand(
                             linear: linear,
                             angular: -angular,
                             servo: currentServoDeg,
@@ -529,6 +607,18 @@ namespace VResQ.Control
                             estop: estop,
                             buzzer: buzzer
                         );
+                    }
+                }
+
+                // Human-Machine tactile proximity feedback when driving toward a close obstacle
+                if (DriveArmed && linear > 0.05f && activeClient.LatestState != null && activeClient.LatestState.telemetry != null)
+                {
+                    float distCm = activeClient.LatestState.telemetry.ultrasonic_cm;
+                    float alertCm = profile != null ? profile.collisionAlertCm : 25f;
+                    if (distCm > 2f && distCm < alertCm && Time.unscaledTime >= _nextObstacleHapticAt)
+                    {
+                        _nextObstacleHapticAt = Time.unscaledTime + 0.65f;
+                        VResQ.HMI.VResqHMIFeedback.Instance?.PulseHaptics(0.45f, 0.09f);
                     }
                 }
             }

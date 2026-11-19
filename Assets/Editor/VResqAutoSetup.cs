@@ -100,6 +100,7 @@ public static class VResqAutoSetup
         presentation.monitorToggle.SetIsOnWithoutNotify(config.Profile.robotMonitorVisible);
         VResqOperationsBuilder.Configure(hud);
         VResqAttitudeBuilder.Configure(hud);
+        VResqHMIBuilder.Configure(hud);
         EditorUtility.SetDirty(presentation);
         EditorUtility.SetDirty(receiver);
         EditorUtility.SetDirty(surround);
