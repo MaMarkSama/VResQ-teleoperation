@@ -74,7 +74,7 @@ public static class VResqHMIBuilder
         ribbonImg.raycastTarget = false;
 
         special.handRibbonPoseText = Label(ribbon, "HANDS: STANDBY", new Vector2(-600f, 0f), new Vector2(500f, 26f), 14, cCyan, TextAlignmentOptions.MidlineLeft);
-        special.handRibbonPendingText = Label(ribbon, "LAST HAND CMD: READY", new Vector2(-80f, 0f), new Vector2(440f, 26f), 13, Color.white, TextAlignmentOptions.MidlineCenter);
+        special.handRibbonPendingText = Label(ribbon, "LAST HAND CMD: READY", new Vector2(-80f, 0f), new Vector2(440f, 26f), 13, Color.white, TextAlignmentOptions.Center);
 
         var progBg = Rect("Ribbon_Prog_Bg", ribbon, new Vector2(215f, 0f), new Vector2(120f, 12f));
         var progBgImg = progBg.gameObject.AddComponent<Image>();
