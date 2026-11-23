@@ -600,8 +600,8 @@ namespace VResQ.Control
                         _lastSentServoDeg = currentServoDeg;
 
                         activeClient.SendDriveCommand(
-                            linear: linear,
-                            angular: -angular,
+                            linear: shouldSendStopOnce ? 0f : linear,
+                            angular: shouldSendStopOnce ? 0f : -angular,
                             servo: currentServoDeg,
                             speed: effectiveSpeedScale,
                             estop: estop,

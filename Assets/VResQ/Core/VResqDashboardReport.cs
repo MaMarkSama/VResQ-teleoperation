@@ -27,6 +27,18 @@ namespace VResQ.Core
             foreach (var pair in new[] { ("CRC checked", "integrity.crc_checked"), ("CRC errors", "integrity.crc_errors"), ("CRC error ratio", "integrity.crc_error_rate"), ("Parse errors", "integrity.parse_errors"), ("TX write errors", "integrity.tx_write_errors"), ("Telemetry age (ms)", "latency.telemetry_age_ms"), ("Command age (ms)", "latency.command_age_ms"), ("Serial time delta (ms, not RTT)", "latency.serial_turnaround_ms") }) Row(output, pair.Item1, root, pair.Item2);
             Title(output, "ROBOT STATE");
             foreach (var pair in new[] { ("FSM", "state.telemetry.fsm_state"), ("Left PWM", "state.left_pwm"), ("Right PWM", "state.right_pwm"), ("Servo (deg)", "state.servo_deg"), ("Mode", "state.mode"), ("E-stop", "state.estop"), ("Ultrasonic", "state.sensors.ultrasonic"), ("BME280", "state.sensors.bme280"), ("MPU6050", "state.sensors.mpu6050"), ("OLED", "state.sensors.oled") }) Row(output, pair.Item1, root, pair.Item2);
+            Row(output, "ESP32 left command", root, "state.telemetry.motor_left_cmd");
+            Row(output, "ESP32 right command", root, "state.telemetry.motor_right_cmd");
+            var encoderStatus = Value(root, "encoder.status");
+            Row(output, "Encoder link", root, "encoder.status");
+            if (encoderStatus == "live")
+            {
+                Row(output, "Left encoder (ticks)", root, "state.telemetry.encoder_left_ticks");
+                Row(output, "Right encoder (ticks)", root, "state.telemetry.encoder_right_ticks");
+                Row(output, "Left travel (mm)", root, "encoder.left_mm");
+                Row(output, "Right travel (mm)", root, "encoder.right_mm");
+            }
+            else output.AppendLine(encoderStatus == "stale" ? "No fresh encoder sample" : "Wheel encoders: unavailable");
             Title(output, "COMMAND PATH");
             foreach (var pair in new[] { ("Jetson TX active", "command_path.jetson_tx_active"), ("ESP32 telemetry active", "command_path.esp32_telemetry_active"), ("Command accepted (inferred)", "command_path.esp32_command_accepted_inferred"), ("ESP32 command RX count", "command_path.esp32_cmd_rx_ok"), ("ESP32 command age (ms)", "command_path.esp32_last_cmd_age_ms"), ("ESP32 CRC errors", "command_path.esp32_crc_errors"), ("Last TX hex", "traffic.last_frame_hex") }) Row(output, pair.Item1, root, pair.Item2);
             Title(output, "FAULT ANALYSIS");

@@ -69,7 +69,8 @@ namespace VResQ.Control
         {
             if (float.IsNaN(axis.x) || float.IsNaN(axis.y) || float.IsInfinity(axis.x) || float.IsInfinity(axis.y) || axis.magnitude <= deadzone) return Vector2.zero;
             float length = Mathf.Clamp01((axis.magnitude - deadzone) / (1 - deadzone));
-            axis = axis.normalized * length;
+            // Blend linear and cubic response for finer low-speed steering.
+            axis = axis.normalized * (0.5f * length * (1f + length * length));
             return new Vector2(Mathf.Clamp(axis.x * steering * (invertSteering ? -1 : 1), -1, 1), axis.y * (invertDrive ? -1 : 1));
         }
 

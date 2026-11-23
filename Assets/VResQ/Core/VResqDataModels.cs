@@ -98,6 +98,9 @@ namespace VResQ.Core
         public bool motor_driver_ok;
         public string motor_driver = "legacy";
         public int motor_left_cmd;
+        public bool encoder_enabled;
+        public int encoder_left_ticks;
+        public int encoder_right_ticks;
         public int motor_right_cmd;
     }
 
