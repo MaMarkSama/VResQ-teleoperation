@@ -214,7 +214,8 @@ namespace VResQ.HMI
             {
                 string ctrlName = teleop != null ? teleop.ActiveControllerName : "INPUT";
                 string statusTag = estop ? "<color=#FF4455>E-STOP</color>" : (armed ? "<color=#00FF88>ARMED</color>" : (auth ? "<color=#FFD166>READY (PRESS L3/ENTER)</color>" : "<color=#FF9966>STANDBY</color>"));
-                handRibbonDriveText.text = $"HMI: {statusTag} | {ctrlName}";
+                string input = hands != null && hands.handDriveEnabled ? "HAND STICK" : ctrlName;
+                handRibbonDriveText.text = $"{statusTag} | {input} | {client?.robotIp}";
             }
 
             if (drawerRoot == null || !drawerRoot.activeSelf) return;
@@ -413,6 +414,8 @@ namespace VResQ.HMI
             var hands = VResqHandGestureController.Instance != null ? VResqHandGestureController.Instance : GetComponent<VResqHandGestureController>();
             if (hands == null) return;
             hands.handDriveEnabled = !hands.handDriveEnabled;
+            VResqTeleopController.Instance?.SetDriveArmed(false);
+            if (hands.handDriveEnabled) hands.handGesturesEnabled = true;
             VResqHMIFeedback.Instance?.ShowToast(
                 hands.handDriveEnabled ? "PINCH HAND-DRIVE ENABLED" : "PINCH HAND-DRIVE OFF",
                 hands.handDriveEnabled ? "Pinch Right hand while ARMED to steer; Open Palm stops immediately" : "Pinch reserved for UI interaction only",

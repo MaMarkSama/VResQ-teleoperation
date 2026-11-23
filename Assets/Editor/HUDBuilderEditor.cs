@@ -104,7 +104,7 @@ public class HUDBuilderEditor : EditorWindow
         }
 
         RectTransform rootRect = hudRoot.GetComponent<RectTransform>();
-        rootRect.sizeDelta = new Vector2(1920f, 1080f);
+        rootRect.sizeDelta = new Vector2(1920f, 1280f);
         rootRect.localScale = new Vector3(0.00085f, 0.00085f, 0.00085f);
 
         // 5. Attach Core Framework Components

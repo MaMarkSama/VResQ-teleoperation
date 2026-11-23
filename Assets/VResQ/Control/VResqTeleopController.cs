@@ -427,7 +427,7 @@ namespace VResQ.Control
                 angular = Mathf.Clamp(angular + handGestures.HandDriveInput.x, -1f, 1f);
                 gripOrShift = true;
             }
-            if (handGestures != null && Mathf.Abs(handGestures.HandServoDeltaDegPerSec) > 0.5f)
+            if (DriveArmed && !NeutralRequired && handGestures != null && Mathf.Abs(handGestures.HandServoDeltaDegPerSec) > 0.5f)
             {
                 _servoFloatDeg = Mathf.Clamp(_servoFloatDeg + handGestures.HandServoDeltaDegPerSec * Time.deltaTime, 20f, 160f);
             }
@@ -556,7 +556,10 @@ namespace VResQ.Control
                 activeClient.StateAgeSeconds > 1.2f || activeClient.LatestState == null || !activeClient.LatestState.motion_authorized ||
                 armedTarget != activeClient.robotIp + ":" + activeClient.port ||
                 (handMode ? !handGestures.RightTracked : quest != null && quest.LostControllers))) SetDriveArmed(false);
-            if (NeutralRequired && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
+            bool handsReleased = !handMode || (handGestures.RightTracked &&
+                handGestures.RightPose != HandGesturePose.None && handGestures.RightPose != HandGesturePose.Pinch &&
+                handGestures.LeftPose != HandGesturePose.Pinch);
+            if (NeutralRequired && handsReleased && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
             if (!DriveArmed || NeutralRequired || menuOpen) { linear = 0; angular = 0; buzzer = false; }
             if (DriveArmed) DriveStatus = NeutralRequired ? "ARMED - release stick to neutral" : "ARMED";
 

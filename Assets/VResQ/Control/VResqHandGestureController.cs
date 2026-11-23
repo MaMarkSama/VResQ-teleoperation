@@ -92,7 +92,7 @@ namespace VResQ.Control
             pinchReady[side] = false;
             var world = head.parent ? head.parent.TransformPoint(trackingPoint) : trackingPoint;
             heldHeads[side] = RestHead(head, side);
-            return Vector3.Distance(world, heldHeads[side]) <= .055f;
+            return Vector3.Distance(world, heldHeads[side]) <= .075f;
         }
         private Quaternion rightBasis, leftBasis;
         private string lastHeld = "";
@@ -255,14 +255,13 @@ namespace VResQ.Control
             bool hasLittleTip = hand.GetJoint(XRHandJointID.LittleTip).TryGetPose(out Pose littleTip);
             bool hasLittleProx = hand.GetJoint(XRHandJointID.LittleProximal).TryGetPose(out Pose littleProx);
 
-            if (!hasIndexTip || !hasIndexProx || !hasMiddleTip || !hasMiddleProx) return HandGesturePose.None;
-
             // 1. Pinch (Thumb Tip <-> Index Tip close)
-            if (hasThumbTip && Vector3.Distance(thumbTip.position, indexTip.position) <= pinchThresholdMeters)
+            if (hasThumbTip && hasIndexTip && Vector3.Distance(thumbTip.position, indexTip.position) <= pinchThresholdMeters)
             {
                 return HandGesturePose.Pinch;
             }
 
+            if (!hasIndexTip || !hasIndexProx || !hasMiddleTip || !hasMiddleProx) return HandGesturePose.None;
             bool indexExt = IsFingerExtended(wrist.position, indexProx.position, indexTip.position, 1.42f);
             bool middleExt = IsFingerExtended(wrist.position, middleProx.position, middleTip.position, 1.42f);
             bool ringExt = hasRingTip && hasRingProx && IsFingerExtended(wrist.position, ringProx.position, ringTip.position, 1.38f);
@@ -307,7 +306,8 @@ namespace VResQ.Control
             HandServoDeltaDegPerSec = 0f;
 
             var teleop = VResqTeleopController.Instance != null ? VResqTeleopController.Instance : GetComponent<VResqTeleopController>();
-            if (!handDriveEnabled || teleop == null || !teleop.DriveArmed)
+            // The handles can be exercised offline. Teleop gates all hardware output.
+            if (!handDriveEnabled || teleop == null)
             {
                 pinchReady[0] = pinchReady[1] = false;
                 _rightPinchAnchored = false;
@@ -380,6 +380,9 @@ namespace VResQ.Control
 
         private static float ShapeAxis(float delta, float deadzone, float maxRange)
         {
+            // Legacy scenes stored 14 cm travel for free-air pinch; match the physical stick.
+            maxRange = Mathf.Clamp(maxRange, .025f, .055f);
+            deadzone = Mathf.Clamp(deadzone, .002f, .008f);
             float abs = Mathf.Abs(delta);
             if (abs <= deadzone) return 0f;
             float norm = Mathf.Clamp01((abs - deadzone) / Mathf.Max(0.01f, maxRange - deadzone));
@@ -402,7 +405,7 @@ namespace VResQ.Control
             var client = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
             var teleop = VResqTeleopController.Instance != null ? VResqTeleopController.Instance : GetComponent<VResqTeleopController>();
             bool estopActive = client != null && client.LatestState != null && client.LatestState.estop;
-            bool motionActive = (teleop != null && (teleop.LiveDriveStick.sqrMagnitude > 0.02f || HasActiveHandDrive)) ||
+            bool motionActive = (teleop != null && teleop.DriveArmed && (teleop.LiveDriveStick.sqrMagnitude > 0.02f || HasActiveHandDrive)) ||
                                 (client != null && client.LatestState != null && !string.IsNullOrEmpty(client.LatestState.active_action));
 
             if (LeftPose == HandGesturePose.OpenPalm && RightPose == HandGesturePose.OpenPalm)

@@ -115,8 +115,6 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (client == null)
         {
             client = gameObject.AddComponent<VResqClient>();
-            client.robotIp = "172.20.10.4";
-            client.port = 8000;
         }
 
         _cameraReceiver = GetComponent<VResqCameraReceiver>();
@@ -136,8 +134,39 @@ public class RescueRobotVRHUD : MonoBehaviour
         WireAllInteractiveButtons();
     }
 
+    private static TMP_FontAsset thaiFallback;
+    private void FitCompactLabels()
+    {
+        // Older scenes placed the navigation at y=600 on a canvas ending at y=540.
+        if (transform is RectTransform root && GetComponent<Canvas>()?.renderMode == RenderMode.WorldSpace &&
+            root.Find("Operations_Navigation") != null && root.rect.height < 1280)
+            root.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, 1280f);
+        if (thaiFallback == null)
+        {
+            foreach (var family in new[] { "Leelawadee UI", "Tahoma", "Noto Sans Thai" })
+            {
+                thaiFallback = TMP_FontAsset.CreateFontAsset(family, "Regular");
+                if (thaiFallback != null) break;
+            }
+        }
+        if (thaiFallback != null && TMP_Settings.fallbackFontAssets != null &&
+            !TMP_Settings.fallbackFontAssets.Contains(thaiFallback))
+            TMP_Settings.fallbackFontAssets.Add(thaiFallback);
+        foreach (var label in new[] { quickHelpHintText, hudDensityBadgeText, viewModeBadgeText,
+            opsStripText, sensorStripText, controllerStatusText, compassHeadingText, fsmActionText })
+        {
+            if (label == null) continue;
+            float size = label.fontSize;
+            label.fontSizeMax = size;
+            label.fontSizeMin = size * .76f;
+            label.enableAutoSizing = true;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+        }
+    }
+
     private void Start()
     {
+        FitCompactLabels();
         ClearTelemetryDisplay();
         if (latencyText != null)
         {
@@ -294,17 +323,17 @@ public class RescueRobotVRHUD : MonoBehaviour
         if (hudDensityBadgeText != null)
         {
             hudDensityBadgeText.text = (hudDensity == HudDensityMode.Streamlined)
-                ? "<b>HUD:</b> <color=#00FF88>🟢 STREAMLINED (มุมมองโปร่งสบาย)</color> <size=12><color=#88AACC>[H/R3 เพื่อเจาะลึก]</color></size>"
-                : "<b>HUD:</b> <color=#00E5FF>🔷 TACTICAL EXPERT (โหมดผู้เชี่ยวชาญ)</color> <size=12><color=#88AACC>[H/R3 เพื่อย่อ]</color></size>";
+                ? "<b>HUD:</b> <color=#00FF88>STREAMLINED (มุมมองโปร่งสบาย)</color> <size=12><color=#88AACC>[H/R3 เพื่อเจาะลึก]</color></size>"
+                : "<b>HUD:</b> <color=#00E5FF>TACTICAL EXPERT (โหมดผู้เชี่ยวชาญ)</color> <size=12><color=#88AACC>[H/R3 เพื่อย่อ]</color></size>";
         }
 
         if (quickHelpHintText != null)
         {
             quickHelpHintText.text =
-                "<color=#00F0FF><b>🎮 [LS]</b> ขับเคลื่อน</color>   " +
+                "<color=#00F0FF><b>[LS]</b> ขับเคลื่อน</color>   " +
                 "<color=#00FF88><b>[RS]</b> หันกล้องรอบตัว</color>   " +
                 "<color=#FFB703><b>[Y/F]</b> สลับภาพรอบตัว/ภายนอก</color>   " +
-                "<color=#00E5FF><b>[H / R3]</b> สลับ HUD มองง่าย ⟷ เจาะลึก</color>   " +
+                "<color=#00E5FF><b>[H / R3]</b> สลับ HUD มองง่าย / เจาะลึก</color>   " +
                 "<color=#00FF88><b>[LB / 1-3]</b> สลับหุ่นยนต์</color>";
         }
     }
@@ -463,11 +492,11 @@ public class RescueRobotVRHUD : MonoBehaviour
             string modeHint = (hudDensity == HudDensityMode.Streamlined) ? " <color=#00FF88>[STREAMLINED]</color>" : " <color=#00E5FF>[EXPERT]</color>";
             viewModeBadgeText.text = surroundDisplay.currentViewMode switch
             {
-                SurroundViewMode.ExternalWorld => $"🌐 VIEW: EXTERNAL WORLD (มองเห็นรอบนอก) [Y/F]{modeHint}",
-                SurroundViewMode.Surround360 => $"🎥 VIEW: 360° SURROUND CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
-                SurroundViewMode.Surround220 => $"🎥 VIEW: 220° PANORAMA CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
-                SurroundViewMode.Surround180 => $"🎥 VIEW: 180° DOME CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
-                _ => $"🎥 VIEW: SURROUND CAM [Y/V]{modeHint}"
+                SurroundViewMode.ExternalWorld => $"VIEW: EXTERNAL WORLD (มองเห็นรอบนอก) [Y/F]{modeHint}",
+                SurroundViewMode.Surround360 => $"VIEW: 360° SURROUND CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                SurroundViewMode.Surround220 => $"VIEW: 220° PANORAMA CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                SurroundViewMode.Surround180 => $"VIEW: 180° DOME CAM (ภาพกล้องรอบตัว) [Y/V]{modeHint}",
+                _ => $"VIEW: SURROUND CAM [Y/V]{modeHint}"
             };
             if (_config != null && _config.Profile.headsetPassthrough)
                 viewModeBadgeText.text = "HEADSET PASSTHROUGH";
@@ -496,7 +525,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             if (controllerStatusText != null)
             {
                 Vector2 st = _teleop.LiveDriveStick;
-                string joyIcon = _teleop.HasPhysicalJoystick ? "🎮 JOYSTICK:" : "⌨ INPUT:";
+                string joyIcon = _teleop.HasPhysicalJoystick ? "JOYSTICK:" : "INPUT:";
                 controllerStatusText.text = $"{joyIcon} <b>{_teleop.ActiveControllerName}</b>  |  L-STICK ({st.x:+0.00;-0.00}, {st.y:+0.00;-0.00})";
                 controllerStatusText.color = _teleop.HasPhysicalJoystick ? new Color(0f, 1f, 0.55f, 1f) : new Color(0.6f, 0.92f, 1f, 1f);
             }
@@ -667,7 +696,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             {
                 float alertLimit = _config != null ? _config.Profile.collisionAlertCm : 25f;
                 string distPill = t.ultrasonic_cm > 0.5f 
-                    ? (t.ultrasonic_cm < alertLimit ? $"<color=#FF2A6D>⚠ {t.ultrasonic_cm:F0} cm (ใกล้)</color>" : $"<color=#00FF88>{t.ultrasonic_cm:F0} cm (ปลอดภัย)</color>") 
+                    ? (t.ultrasonic_cm < alertLimit ? $"<color=#FF2A6D>{t.ultrasonic_cm:F0} cm (ใกล้)</color>" : $"<color=#00FF88>{t.ultrasonic_cm:F0} cm (ปลอดภัย)</color>") 
                     : "<color=#70889B>-- cm (NO ECHO)</color>";
                 string tempPill = dispTemp > 0.1f ? $"<color=#00F0FF>{dispTemp:F1}°C ({tempSourceTag})</color>" : "<color=#70889B>--</color>";
                 string hdgPill = $"<color=#00FF88>{normHdg:000}° {GetCompassDirection(normHdg)}</color>";
@@ -738,7 +767,7 @@ public class RescueRobotVRHUD : MonoBehaviour
             obstacleAlertPanel.SetActive(alert);
             if (obstacleDistanceText != null && alert)
             {
-                obstacleDistanceText.text = $"⚠ PROXIMITY HAZARD — {dist:F0} CM AHEAD  |  AUTO-BRAKE";
+                obstacleDistanceText.text = $"PROXIMITY HAZARD — {dist:F0} CM AHEAD  |  AUTO-BRAKE";
             }
         }
 
