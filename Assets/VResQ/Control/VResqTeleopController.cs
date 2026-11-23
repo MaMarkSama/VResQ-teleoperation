@@ -555,10 +555,10 @@ namespace VResQ.Control
             if (DriveArmed && (menuOpen || !Application.isFocused || activeClient == null || !activeClient.ControlAuthenticated ||
                 activeClient.StateAgeSeconds > 1.2f || activeClient.LatestState == null || !activeClient.LatestState.motion_authorized ||
                 armedTarget != activeClient.robotIp + ":" + activeClient.port ||
-                (handMode ? !handGestures.RightTracked : quest != null && quest.LostControllers))) SetDriveArmed(false);
-            bool handsReleased = !handMode || (handGestures.RightTracked &&
-                handGestures.RightPose != HandGesturePose.None && handGestures.RightPose != HandGesturePose.Pinch &&
-                handGestures.LeftPose != HandGesturePose.Pinch);
+                (handMode ? !handGestures.LeftTracked : quest != null && quest.LostControllers))) SetDriveArmed(false);
+            bool handsReleased = !handMode || (handGestures.LeftTracked &&
+                handGestures.LeftPose != HandGesturePose.None && handGestures.LeftPose != HandGesturePose.Fist &&
+                handGestures.RightPose != HandGesturePose.Pinch);
             if (NeutralRequired && handsReleased && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
             if (!DriveArmed || NeutralRequired || menuOpen) { linear = 0; angular = 0; buzzer = false; }
             if (DriveArmed) DriveStatus = NeutralRequired ? "ARMED - release stick to neutral" : "ARMED";

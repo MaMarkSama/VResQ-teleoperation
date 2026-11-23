@@ -203,7 +203,7 @@ namespace VResQ.HMI
                 }
                 else if (hands != null && hands.HasActiveHandDrive)
                 {
-                    handRibbonPendingText.text = $"PINCH-DRIVE: LIN {hands.HandDriveInput.y:+0.00;-0.00} ANG {hands.HandDriveInput.x:+0.00;-0.00}";
+                    handRibbonPendingText.text = $"LEFT GRIP: LIN {hands.HandDriveInput.y:+0.00;-0.00} ANG {hands.HandDriveInput.x:+0.00;-0.00}";
                 }
                 else
                 {
@@ -244,7 +244,7 @@ namespace VResQ.HMI
             }
             if (handDriveToggleLabel != null && hands != null)
             {
-                handDriveToggleLabel.text = hands.handDriveEnabled ? "PINCH HAND-DRIVE: ON" : "PINCH HAND-DRIVE: OFF";
+                handDriveToggleLabel.text = hands.handDriveEnabled ? "LEFT GRIP DRIVE: ON" : "LEFT GRIP DRIVE: OFF";
             }
             if (soundToggleLabel != null && hmi != null)
             {
@@ -417,8 +417,8 @@ namespace VResQ.HMI
             VResqTeleopController.Instance?.SetDriveArmed(false);
             if (hands.handDriveEnabled) hands.handGesturesEnabled = true;
             VResqHMIFeedback.Instance?.ShowToast(
-                hands.handDriveEnabled ? "PINCH HAND-DRIVE ENABLED" : "PINCH HAND-DRIVE OFF",
-                hands.handDriveEnabled ? "Pinch Right hand while ARMED to steer; Open Palm stops immediately" : "Pinch reserved for UI interaction only",
+                hands.handDriveEnabled ? "LEFT GRIP ENABLED" : "LEFT GRIP OFF",
+                hands.handDriveEnabled ? "Close left fist to drive. Right pinch pans camera." : "Pinch reserved for UI interaction only",
                 hands.handDriveEnabled ? new Color(0.1f, 1f, 0.55f) : new Color(1f, 0.78f, 0.18f), 2.8f);
             RefreshVisualStates();
         }

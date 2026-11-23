@@ -105,16 +105,21 @@ namespace VResQ.Control
                 bool show = cam && handGesturesEnabled && handDriveEnabled && (i == 0 ? LeftTracked : RightTracked);
                 if (!show) { if (pads[i]) pads[i].gameObject.SetActive(false); continue; }
                 var hand = i == 0 ? _handSubsystem.leftHand : _handSubsystem.rightHand;
-                if (!hand.GetJoint(XRHandJointID.IndexTip).TryGetPose(out _))
+                if (!hand.GetJoint(i == 0 ? XRHandJointID.Palm : XRHandJointID.IndexTip).TryGetPose(out _))
                 { if (pads[i]) pads[i].gameObject.SetActive(false); continue; }
                 if (!pads[i])
                 {
                     pads[i] = new GameObject().transform;
-                    pads[i].name = i == 0 ? "Gesture Camera Stick" : "Gesture Drive Stick";
+                    pads[i].name = i == 0 ? "Left Drive Grip" : "Right Camera Stick";
                     var baseDisc = GameObject.CreatePrimitive(PrimitiveType.Cylinder).transform;
                     baseDisc.GetComponent<Collider>().enabled = false;
                     baseDisc.SetParent(pads[i], false);
-                    baseDisc.localScale = new Vector3(.105f,.006f,.105f);
+                    baseDisc.localScale = i == 0 ? new Vector3(.115f,.007f,.115f) : new Vector3(.09f,.005f,.09f);
+                    var trim = GameObject.CreatePrimitive(PrimitiveType.Cube).transform;
+                    trim.GetComponent<Collider>().enabled = false;
+                    trim.SetParent(pads[i], false);
+                    trim.localPosition = new Vector3(0,.008f,.035f);
+                    trim.localScale = new Vector3(.008f,.002f,.018f);
                     pivots[i] = new GameObject("Stick pivot").transform;
                     pivots[i].SetParent(pads[i], false);
                     var shaft = GameObject.CreatePrimitive(PrimitiveType.Cylinder).transform;
@@ -136,7 +141,7 @@ namespace VResQ.Control
                 pads[i].gameObject.SetActive(true);
                 pads[i].position = (anchored ? heldHeads[i] : RestHead(cam.transform,i)) - Vector3.up * StickHeight;
                 pads[i].rotation = anchored ? (origin ? origin.rotation : Quaternion.identity) * (i == 0 ? leftBasis : rightBasis) : Quaternion.Euler(0,cam.transform.eulerAngles.y,0);
-                Vector2 axis = i == 0 ? new Vector2(HandServoDeltaDegPerSec / 70f,0) : HandDriveInput;
+                Vector2 axis = i == 0 ? HandDriveInput : new Vector2(HandServoDeltaDegPerSec / 70f,0);
                 axis = Vector2.ClampMagnitude(axis, 1f);
                 pivots[i].localRotation = Quaternion.Euler(axis.y*32f,0,-axis.x*32f);
             }
@@ -255,13 +260,24 @@ namespace VResQ.Control
             bool hasLittleTip = hand.GetJoint(XRHandJointID.LittleTip).TryGetPose(out Pose littleTip);
             bool hasLittleProx = hand.GetJoint(XRHandJointID.LittleProximal).TryGetPose(out Pose littleProx);
 
-            // 1. Pinch (Thumb Tip <-> Index Tip close)
+            // A closed driving hand often puts thumb and index close together too.
+            if (hand.handedness == Handedness.Left && handDriveEnabled &&
+                hasIndexTip && hasIndexProx && hasMiddleTip && hasMiddleProx && hasRingTip && hasRingProx &&
+                hasLittleTip && hasLittleProx &&
+                !IsFingerExtended(wrist.position,indexProx.position,indexTip.position,1.24f) &&
+                !IsFingerExtended(wrist.position,middleProx.position,middleTip.position,1.24f) &&
+                !IsFingerExtended(wrist.position,ringProx.position,ringTip.position,1.24f) &&
+                !IsFingerExtended(wrist.position,littleProx.position,littleTip.position,1.24f) &&
+                !(hasThumbTip && hasThumbProx && IsFingerExtended(wrist.position,thumbProx.position,thumbTip.position,1.28f)))
+                return HandGesturePose.Fist;
+
+            // Pinch (Thumb Tip <-> Index Tip close)
             if (hasThumbTip && hasIndexTip && Vector3.Distance(thumbTip.position, indexTip.position) <= pinchThresholdMeters)
             {
                 return HandGesturePose.Pinch;
             }
 
-            if (!hasIndexTip || !hasIndexProx || !hasMiddleTip || !hasMiddleProx) return HandGesturePose.None;
+            if (!hasIndexTip || !hasIndexProx || !hasMiddleTip || !hasMiddleProx || !hasRingTip || !hasRingProx || !hasLittleTip || !hasLittleProx) return HandGesturePose.None;
             bool indexExt = IsFingerExtended(wrist.position, indexProx.position, indexTip.position, 1.42f);
             bool middleExt = IsFingerExtended(wrist.position, middleProx.position, middleTip.position, 1.42f);
             bool ringExt = hasRingTip && hasRingProx && IsFingerExtended(wrist.position, ringProx.position, ringTip.position, 1.38f);
@@ -277,7 +293,14 @@ namespace VResQ.Control
             if (indexExt && middleExt && !ringExt && !littleExt) return HandGesturePose.Peace;
 
             // 4. Point (Index extended only)
-            if (indexExt && !middleExt && !ringExt && !littleExt) return HandGesturePose.Point;
+            if (indexExt && !middleExt && !ringExt && !littleExt &&
+                hand.GetJoint(XRHandJointID.IndexIntermediate).TryGetPose(out Pose indexMid))
+            {
+                Vector3 proximal = indexMid.position - indexProx.position;
+                Vector3 distal = indexTip.position - indexMid.position;
+                if (Vector3.Dot(proximal.normalized, distal.normalized) > .85f)
+                    return HandGesturePose.Point;
+            }
 
             // 5. Thumbs Up (Thumb extended pointing upward, other 4 curled)
             if (thumbExt && fourCount == 0 && hasThumbTip && hasThumbProx)
@@ -316,7 +339,7 @@ namespace VResQ.Control
             }
 
             if (RightTracked && RightPose != HandGesturePose.Pinch) pinchReady[1] = true;
-            if (LeftTracked && LeftPose != HandGesturePose.Pinch) pinchReady[0] = true;
+            if (LeftTracked && LeftPose != HandGesturePose.None && LeftPose != HandGesturePose.Fist) pinchReady[0] = true;
             if (!RightTracked) pinchReady[1] = false;
             if (!LeftTracked) pinchReady[0] = false;
             // Open Palm immediately cancels hand-drive for safety
@@ -330,52 +353,40 @@ namespace VResQ.Control
             Transform head = Camera.main != null ? Camera.main.transform : transform;
             Quaternion basis = Quaternion.Euler(0, head.localEulerAngles.y, 0);
 
-            // Right Hand Pinch -> Steer Linear / Angular
-            if (RightTracked && RightPose == HandGesturePose.Pinch && right.GetJoint(XRHandJointID.IndexTip).TryGetPose(out Pose rPalm)
-                && (_rightPinchAnchored || CanGrab(1, head, rPalm.position)))
+            if (LeftTracked && LeftPose == HandGesturePose.Fist && left.GetJoint(XRHandJointID.Palm).TryGetPose(out Pose palm))
             {
-                Vector3 headLocal = rPalm.position;
-                if (!_rightPinchAnchored)
+                if (!_leftPinchAnchored && pinchReady[0])
                 {
-                    _rightPinchAnchored = true;
-                    rightBasis = basis;
-                    _rightPinchAnchorLocal = headLocal;
+                    pinchReady[0] = false;
+                    _leftPinchAnchored = true;
+                    _leftPinchAnchorLocal = palm.position;
+                    heldHeads[0] = head.parent ? head.parent.TransformPoint(palm.position) : palm.position;
+                    leftBasis = basis;
                 }
-                else
+                if (_leftPinchAnchored)
                 {
-                    Vector3 delta = Quaternion.Inverse(rightBasis) * (headLocal - _rightPinchAnchorLocal);
-                    float lin = ShapeAxis(delta.z, handDriveDeadzoneMeters, handDriveMaxOffsetMeters);
-                    float ang = ShapeAxis(delta.x, handDriveDeadzoneMeters, handDriveMaxOffsetMeters);
-                    HandDriveInput = new Vector2(ang, lin);
+                    var d = Quaternion.Inverse(leftBasis) * (palm.position - _leftPinchAnchorLocal);
+                    HandDriveInput = Vector2.ClampMagnitude(new Vector2(
+                        ShapeAxis(d.x,handDriveDeadzoneMeters,handDriveMaxOffsetMeters),
+                        ShapeAxis(d.z,handDriveDeadzoneMeters,handDriveMaxOffsetMeters)),1f);
                     HasActiveHandDrive = true;
                 }
             }
-            else
-            {
-                _rightPinchAnchored = false;
-            }
+            else _leftPinchAnchored = false;
 
-            // Left Hand Pinch -> Pan Camera Gimbal Servo
-            if (LeftTracked && LeftPose == HandGesturePose.Pinch && left.GetJoint(XRHandJointID.IndexTip).TryGetPose(out Pose lPalm)
-                && (_leftPinchAnchored || CanGrab(0, head, lPalm.position)))
+            if (RightTracked && RightPose == HandGesturePose.Pinch && right.GetJoint(XRHandJointID.IndexTip).TryGetPose(out Pose tip)
+                && (_rightPinchAnchored || CanGrab(1,head,tip.position)))
             {
-                Vector3 headLocal = lPalm.position;
-                if (!_leftPinchAnchored)
+                if (!_rightPinchAnchored)
                 {
-                    _leftPinchAnchored = true;
-                    leftBasis = basis;
-                    _leftPinchAnchorLocal = headLocal;
+                    _rightPinchAnchored = true;
+                    _rightPinchAnchorLocal = tip.position;
+                    rightBasis = basis;
                 }
-                else
-                {
-                    float panNorm = ShapeAxis((Quaternion.Inverse(leftBasis) * (headLocal - _leftPinchAnchorLocal)).x, handDriveDeadzoneMeters, handDriveMaxOffsetMeters);
-                    HandServoDeltaDegPerSec = panNorm * 70f;
-                }
+                float x = (Quaternion.Inverse(rightBasis) * (tip.position - _rightPinchAnchorLocal)).x;
+                HandServoDeltaDegPerSec = ShapeAxis(x,handDriveDeadzoneMeters,handDriveMaxOffsetMeters) * 70f;
             }
-            else
-            {
-                _leftPinchAnchored = false;
-            }
+            else _rightPinchAnchored = false;
         }
 
         private static float ShapeAxis(float delta, float deadzone, float maxRange)
@@ -420,6 +431,20 @@ namespace VResQ.Control
                 candidateLabel = "OPEN PALM -> SAFE STOP";
                 requiredHold = safeStopHoldSeconds;
             }
+            else if (HasActiveHandDrive || _rightPinchAnchored)
+            {
+                // Never issue a menu, node-switch or arm gesture while manipulating a stick.
+            }
+            else if (LeftPose == HandGesturePose.Peace && RightPose == HandGesturePose.Peace)
+            {
+                candidateKey = "SHOW_PROTOCOL";
+                candidateLabel = "BOTH PEACE -> PROTOCOL";
+            }
+            else if (LeftPose == HandGesturePose.Point && RightPose == HandGesturePose.Peace)
+            {
+                candidateKey = "SHOW_LIVE";
+                candidateLabel = "LEFT POINT + RIGHT PEACE -> LIVE";
+            }
             else if (RightPose == HandGesturePose.ThumbsUp && LeftPose != HandGesturePose.ThumbsUp)
             {
                 candidateKey = estopActive ? "R_THUMB_RESET_ESTOP" : "R_THUMB_ARM_TOGGLE";
@@ -432,7 +457,7 @@ namespace VResQ.Control
                 candidateLabel = "RIGHT PEACE -> RADAR SWEEP";
                 requiredHold = commandHoldSeconds;
             }
-            else if (LeftPose == HandGesturePose.Peace)
+            else if (LeftPose == HandGesturePose.Peace && RightPose != HandGesturePose.Point)
             {
                 candidateKey = "L_PEACE_NEXT_NODE";
                 candidateLabel = "LEFT PEACE -> SWITCH ROBOT NODE";
@@ -444,10 +469,10 @@ namespace VResQ.Control
                 candidateLabel = "LEFT THUMB UP -> SPECIAL OPS MENU";
                 requiredHold = commandHoldSeconds;
             }
-            else if (RightPose == HandGesturePose.Point && LeftPose == HandGesturePose.Fist)
+            else if (RightPose == HandGesturePose.Point && LeftPose == HandGesturePose.Peace)
             {
                 candidateKey = "PRECISION_DOWN";
-                candidateLabel = "LEFT FIST + RIGHT POINT -> LOWER SPEED";
+                candidateLabel = "LEFT PEACE + RIGHT POINT -> LOWER SPEED";
             }
             else if (RightPose == HandGesturePose.Fist && LeftPose == HandGesturePose.Point)
             {
@@ -506,6 +531,13 @@ namespace VResQ.Control
 
             switch (commandId)
             {
+                case "SHOW_PROTOCOL":
+                case "SHOW_LIVE":
+                    teleop?.SetDriveArmed(false);
+                    var tab = commandId == "SHOW_PROTOCOL" ? "Protocol" : "Live";
+                    GetComponent<VResqOperationsPanel>()?.Show(tab);
+                    LastExecutedCommand = tab;
+                    break;
                 case "PRECISION_DOWN":
                     teleop?.AdjustSpeedScale(-0.1f);
                     LastExecutedCommand = "LOWER SPEED";
@@ -588,7 +620,7 @@ namespace VResQ.Control
             if (!LeftTracked && !RightTracked) return "HANDS: STANDBY (NO XR HANDS)";
             string l = LeftTracked ? LeftPose.ToString().ToUpperInvariant() : "--";
             string r = RightTracked ? RightPose.ToString().ToUpperInvariant() : "--";
-            string driveTag = handDriveEnabled ? " | PINCH-DRIVE" : "";
+            string driveTag = handDriveEnabled ? " | LEFT GRIP" : "";
             return $"HANDS L:{l} R:{r}{driveTag}";
         }
     }
