@@ -541,12 +541,21 @@ namespace VResQ.Control
             currentServoDeg = Mathf.RoundToInt(_servoFloatDeg);
             var activeClient = VResqClient.Instance != null ? VResqClient.Instance : GetComponent<VResqClient>();
             var operations = GetComponent<VResqOperationsPanel>();
+            bool handMode = handGestures != null && handGestures.isActiveAndEnabled &&
+                handGestures.handGesturesEnabled && handGestures.handDriveEnabled;
+            if (handMode)
+            {
+                linear = handGestures.HandDriveInput.y;
+                angular = handGestures.HandDriveInput.x;
+                gripOrShift = handGestures.HasActiveHandDrive;
+            }
             var operatorHud = GetComponent<RescueRobotVRHUD>();
             bool menuOpen = (operations != null && operations.ActiveTab != "Live") ||
                             (operatorHud != null && operatorHud.settingsModalRoot != null && operatorHud.settingsModalRoot.activeSelf);
             if (DriveArmed && (menuOpen || !Application.isFocused || activeClient == null || !activeClient.ControlAuthenticated ||
                 activeClient.StateAgeSeconds > 1.2f || activeClient.LatestState == null || !activeClient.LatestState.motion_authorized ||
-                armedTarget != activeClient.robotIp + ":" + activeClient.port || (quest != null && quest.LostControllers))) SetDriveArmed(false);
+                armedTarget != activeClient.robotIp + ":" + activeClient.port ||
+                (handMode ? !handGestures.RightTracked : quest != null && quest.LostControllers))) SetDriveArmed(false);
             if (NeutralRequired && Mathf.Abs(linear) < .01f && Mathf.Abs(angular) < .01f) NeutralRequired = false;
             if (!DriveArmed || NeutralRequired || menuOpen) { linear = 0; angular = 0; buzzer = false; }
             if (DriveArmed) DriveStatus = NeutralRequired ? "ARMED - release stick to neutral" : "ARMED";

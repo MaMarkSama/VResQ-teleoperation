@@ -18,6 +18,7 @@ namespace VResQ.Video
         private Coroutine initialization;
         private string lastStatus;
         private float nextLog;
+        private float nextLoaderRetry;
         private Canvas isolatedCanvas;
         public bool Isolated => isolatedCanvas != null && !isolatedCanvas.enabled;
         public void ToggleIsolation(Canvas canvas)
@@ -68,7 +69,7 @@ namespace VResQ.Video
                 if (initialization != null) return "Initializing Quest Link XR";
                 var manager = XRGeneralSettings.Instance != null ? XRGeneralSettings.Instance.Manager : null;
                 if (manager == null || manager.activeLoader == null) return "Link headset unavailable - reconnect Link and toggle Headset view";
-                if (!OpenXRRuntime.IsExtensionEnabled("XR_FB_passthrough")) return "Link passthrough unavailable - check Developer settings";
+                if (!OpenXRRuntime.IsExtensionEnabled("XR_FB_passthrough")) return $"Runtime: {OpenXRRuntime.name}; XR_FB_passthrough unavailable. Select Meta Horizon Link runtime and enable passthrough on this PC.";
                 var cameraManager = GetComponent<ARCameraManager>();
                 if (cameraManager.subsystem == null) return "Passthrough camera subsystem missing";
                 if (!cameraManager.subsystem.running) return "Passthrough camera subsystem stopped";
@@ -93,6 +94,7 @@ namespace VResQ.Video
         {
             // XR manual initialization requires graphics initialization to have completed.
             yield return null;
+            Request(requested);
             if (requested) RetryInitialization();
         }
 
@@ -144,6 +146,11 @@ namespace VResQ.Video
         {
             if (Time.unscaledTime < nextLog) return;
             nextLog = Time.unscaledTime + 1;
+            if (requested && initialization == null && Time.unscaledTime >= nextLoaderRetry)
+            {
+                nextLoaderRetry = Time.unscaledTime + 8f;
+                RetryInitialization();
+            }
             // Restore alpha blending after a late XR session or composition-layer restart.
             if (requested && XRSettings.isDeviceActive)
                 foreach (var layer in FindObjectsByType<CompositionLayer>(FindObjectsSortMode.None))
